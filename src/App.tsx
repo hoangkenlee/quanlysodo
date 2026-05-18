@@ -312,7 +312,7 @@ export default function App() {
 
     for (let i = 0; i < uploadedFiles.length; i++) {
       const file = uploadedFiles[i];
-      if (!file.name.toLowerCase().endsWith('.plt') && !file.name.toLowerCase().endsWith('.hpgl')) continue;
+      if (!file.name.toLowerCase().endsWith('.plt') && !file.name.toLowerCase().endsWith('.hpgl') && !file.name.toLowerCase().endsWith('.hpg')) continue;
 
       const code = extractCode(file.name);
       const mapping = codeMappings.find(m => m.code === code);
@@ -999,7 +999,7 @@ create policy "Users manage own files" on plt_files for all to authenticated usi
                 <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-200">
                   <h2 className="text-lg font-semibold mb-4 flex items-center gap-2">
                     <FileUp size={20} className="text-blue-600" />
-                    Nhập File PLT / HPGL
+                    Nhập File PLT / HPGL / HPG
                   </h2>
                   <div className="grid grid-cols-1 gap-3">
                     <div 
@@ -1013,7 +1013,7 @@ create policy "Users manage own files" on plt_files for all to authenticated usi
                         ref={fileInputRef}
                         onChange={handleFileSelection}
                         multiple
-                        accept=".plt,.hpgl"
+                        accept=".plt,.hpgl,.hpg"
                         className="hidden"
                       />
                     </div>
