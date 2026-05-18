@@ -18,6 +18,7 @@ import {
   X,
   LogIn,
   FileText,
+  FileSpreadsheet,
   Image as ImageIcon
 } from 'lucide-react';
 import { 
@@ -46,6 +47,7 @@ import { PLTFileRecord, Customer, CodeMapping } from './types';
 import { parsePLT, calculateAdjustedDimensions } from './lib/pltParser';
 import { dbService } from './services/dbService';
 import { pdfService } from './services/pdfService';
+import { excelService } from './services/excelService';
 import { AuthForm } from './components/AuthForm';
 import { getSupabase } from './lib/supabase';
 import { User, Session } from '@supabase/supabase-js';
@@ -466,6 +468,37 @@ export default function App() {
     } catch (error) {
       console.error('Lỗi khi tạo PDF:', error);
       setOperationError('Không thể tạo hoá đơn PDF. Vui lòng thử lại.');
+    }
+  };
+
+  const confirmExportExcel = async () => {
+    const unitPriceValue = invoiceModal.unitPrice ? parseInt(invoiceModal.unitPrice.replace(/\D/g, ''), 10) : undefined;
+    
+    try {
+      excelService.generateInvoice({
+        customerName: invoiceModal.customerName,
+        date: invoiceModal.dateLabel,
+        files: invoiceModal.files.map(f => ({
+          fileName: f.fileName,
+          width: f.originalWidth,
+          length: f.originalLength,
+          adjustedLength: f.adjustedLength
+        })),
+        totalLength: invoiceModal.files.reduce((acc, f) => acc + f.adjustedLength, 0),
+        unitPrice: unitPriceValue,
+        designItems: invoiceModal.designItems.map(item => ({
+          name: item.name,
+          amount: parseInt(item.amount.replace(/\D/g, '') || '0', 10),
+          notes: item.notes,
+          imageUrl: item.imageUrl
+        }))
+      });
+      
+      setInvoiceModal(prev => ({ ...prev, show: false }));
+      setSuccessMessage('Đã tạo hoá đơn Excel thành công!');
+    } catch (error) {
+      console.error('Lỗi khi tạo Excel:', error);
+      setOperationError('Không thể tạo hoá đơn Excel. Vui lòng thử lại.');
     }
   };
 
@@ -1840,18 +1873,24 @@ create policy "Users manage own files" on plt_files for all to authenticated usi
                     </div>
                   </div>
 
-                  <div className="pt-4 flex gap-3 sticky bottom-0 bg-white pb-2 border-t border-gray-100">
+                  <div className="pt-4 grid grid-cols-2 lg:grid-cols-3 gap-3 sticky bottom-0 bg-white pb-2 border-t border-gray-100">
                     <button 
                       onClick={() => setInvoiceModal(prev => ({ ...prev, show: false }))}
-                      className="flex-1 py-3 bg-gray-100 hover:bg-gray-200 text-gray-700 font-bold rounded-xl transition-all"
+                      className="py-3 bg-gray-100 hover:bg-gray-200 text-gray-700 font-bold rounded-xl transition-all"
                     >
-                      Huỷ bỏ
+                      Huỷ
+                    </button>
+                    <button 
+                      onClick={confirmExportExcel}
+                      className="py-3 bg-green-600 hover:bg-green-700 text-white font-bold rounded-xl shadow-lg shadow-green-100 transition-all flex items-center justify-center gap-2"
+                    >
+                      <FileSpreadsheet size={18} /> Excel
                     </button>
                     <button 
                       onClick={confirmExportInvoice}
-                      className="flex-1 py-3 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-xl shadow-lg shadow-blue-100 transition-all flex items-center justify-center gap-2"
+                      className="col-span-2 lg:col-span-1 py-3 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-xl shadow-lg shadow-blue-100 transition-all flex items-center justify-center gap-2"
                     >
-                      <Download size={18} /> Tải Hoá Đơn
+                      <Download size={18} /> Tải PDF
                     </button>
                   </div>
                 </div>
