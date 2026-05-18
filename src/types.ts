@@ -7,6 +7,7 @@ export interface PLTFileRecord {
   originalLength: number; // meters
   adjustedLength: number; // meters
   isOverWidth: boolean;
+  isArchived?: boolean;
   createdAt: string; // ISO date
   fileDate: string; // File creation date (from metadata)
 }
