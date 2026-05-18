@@ -1,0 +1,5 @@
+{
+  "name": "Remix: Quản lý Sơ đồ PLT Ngành May-push",
+  "description": "Ứng dụng đọc file PLT, tính toán kích thước sơ đồ, phân loại khách hàng và thống kê sản lượng in ấn. Sử dụng Supabase để lưu trữ dữ liệu.",
+  "requestFramePermissions": []
+}
