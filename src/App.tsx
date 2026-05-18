@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, ChangeEvent } from 'react';
+import React, { useState, useEffect, useMemo, useRef, ChangeEvent } from 'react';
 import { 
   FileUp, 
   Users, 
@@ -115,6 +115,29 @@ export default function App() {
   const [isLoading, setIsLoading] = useState(true);
   const [fatalError, setFatalError] = useState<string | null>(null);
   const [operationError, setOperationError] = useState<string | null>(null);
+  const [selectedHistoryIds, setSelectedHistoryIds] = useState<Set<string>>(new Set());
+  const [archivedIds, setArchivedIds] = useState<Set<string>>(() => {
+    try {
+      const saved = localStorage.getItem('archived_plt_ids');
+      return saved ? new Set(JSON.parse(saved)) : new Set();
+    } catch {
+      return new Set();
+    }
+  });
+
+  // Sync archivedIds to localStorage
+  useEffect(() => {
+    localStorage.setItem('archived_plt_ids', JSON.stringify(Array.from(archivedIds)));
+  }, [archivedIds]);
+
+  const [confirmModal, setConfirmModal] = useState<{
+    show: boolean;
+    title: string;
+    message: string;
+    onConfirm: () => void;
+    isLoading?: boolean;
+    type?: 'danger' | 'warning' | 'info';
+  }>({ show: false, title: '', message: '', onConfirm: () => {} });
   const [invoiceModal, setInvoiceModal] = useState<{
     show: boolean;
     customerName: string;
@@ -165,6 +188,8 @@ export default function App() {
       return () => clearTimeout(timer);
     }
   }, [operationError, successMessage]);
+
+  const historyFiles = useMemo(() => files.filter(f => !archivedIds.has(f.id)), [files, archivedIds]);
   
   // Pending files to be classified
   const [pendingFiles, setPendingFiles] = useState<{
@@ -717,6 +742,60 @@ export default function App() {
     } finally {
       setIsProcessing(false);
     }
+  };
+
+  const toggleSelectHistoryFile = (id: string) => {
+    setSelectedHistoryIds(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
+  const toggleSelectAllHistory = () => {
+    if (selectedHistoryIds.size === files.length && files.length > 0) {
+      setSelectedHistoryIds(new Set());
+    } else {
+      setSelectedHistoryIds(new Set(files.map(f => f.id)));
+    }
+  };
+
+  const handleBulkDeleteHistory = async () => {
+    if (selectedHistoryIds.size === 0) return;
+    
+    setConfirmModal({
+      show: true,
+      title: 'Xác nhận xoá lịch sử',
+      message: `Bạn có chắc chắn muốn xoá ${selectedHistoryIds.size} file đã chọn khỏi danh sách lịch sử? Dữ liệu này sẽ KHÔNG bị mất trong phần Tổng quát / Thống kê.`,
+      type: 'warning',
+      onConfirm: async () => {
+        setIsProcessing(true);
+        setConfirmModal(prev => ({ ...prev, isLoading: true }));
+        
+        try {
+          const idsToArchive = Array.from(selectedHistoryIds) as string[];
+          
+          setArchivedIds(prev => {
+            const next = new Set(prev);
+            idsToArchive.forEach(id => next.add(id));
+            return next;
+          });
+
+          setSelectedHistoryIds(new Set());
+          setSuccessMessage(`Đã ẩn thành công ${idsToArchive.length} file khỏi lịch sử.`);
+        } catch (err) {
+          console.error('Error in bulk archive history:', err);
+          setOperationError('Lỗi khi thực hiện xoá lịch sử.');
+        } finally {
+          setIsProcessing(true); // Keep it busy for a tiny bit if needed, but actually archive is fast
+          setTimeout(() => {
+            setIsProcessing(false);
+            setConfirmModal({ show: false, title: '', message: '', onConfirm: () => {} });
+          }, 300);
+        }
+      }
+    });
   };
 
   const removePendingFile = (index: number) => {
@@ -1371,14 +1450,38 @@ create policy "Users manage own files" on plt_files for all to authenticated usi
 
             {/* History Table */}
             <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
-              <div className="p-6 border-b border-gray-100 flex justify-between items-center">
-                <h2 className="text-lg font-semibold">Lịch sử File đã lưu</h2>
-                <span className="text-sm text-gray-500">{files.length} file</span>
+              <div className="p-6 border-b border-gray-100 flex justify-between items-center bg-white">
+                <div className="flex items-center gap-4">
+                  <h2 className="text-lg font-semibold">Lịch sử File đã lưu</h2>
+                  <span className="text-sm text-gray-500">{historyFiles.length} file</span>
+                  {selectedHistoryIds.size > 0 && (
+                    <button 
+                      onClick={handleBulkDeleteHistory}
+                      className="flex items-center gap-1.5 px-3 py-1.5 bg-red-50 text-red-600 rounded-lg hover:bg-red-100 transition-colors text-xs font-bold border border-red-100"
+                    >
+                      <Trash2 size={14} /> Xoá {selectedHistoryIds.size} file đã chọn
+                    </button>
+                  )}
+                </div>
               </div>
               <div className="overflow-x-auto">
                 <table className="w-full text-left border-collapse">
                   <thead>
-                    <tr className="bg-gray-50 text-gray-500 text-xs uppercase tracking-wider">
+                    <tr className="bg-gray-50 text-gray-500 text-xs uppercase tracking-wider border-b border-gray-100">
+                      <th className="px-6 py-3 w-10">
+                        <input 
+                          type="checkbox" 
+                          checked={selectedHistoryIds.size === historyFiles.length && historyFiles.length > 0}
+                          onChange={() => {
+                            if (selectedHistoryIds.size === historyFiles.length && historyFiles.length > 0) {
+                              setSelectedHistoryIds(new Set());
+                            } else {
+                              setSelectedHistoryIds(new Set(historyFiles.map(f => f.id)));
+                            }
+                          }}
+                          className="w-4 h-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500 cursor-pointer"
+                        />
+                      </th>
                       <th className="px-6 py-3 font-semibold">Tên File</th>
                       <th className="px-6 py-3 font-semibold">Khách hàng</th>
                       <th className="px-6 py-3 font-semibold">Ngày File</th>
@@ -1388,8 +1491,16 @@ create policy "Users manage own files" on plt_files for all to authenticated usi
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-gray-100">
-                    {files.map(file => (
-                      <tr key={file.id} className={`hover:bg-gray-50/50 transition-colors ${file.isOverWidth ? 'bg-red-50/30' : ''}`}>
+                    {historyFiles.map(file => (
+                      <tr key={file.id} className={`hover:bg-gray-50/50 transition-colors ${selectedHistoryIds.has(file.id) ? 'bg-blue-50/20' : ''} ${file.isOverWidth ? 'bg-red-50/30' : ''}`}>
+                        <td className="px-6 py-4">
+                          <input 
+                            type="checkbox" 
+                            checked={selectedHistoryIds.has(file.id)}
+                            onChange={() => toggleSelectHistoryFile(file.id)}
+                            className="w-4 h-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500 cursor-pointer"
+                          />
+                        </td>
                         <td className="px-6 py-4">
                           <div className="flex flex-col">
                             <span className="font-medium text-gray-900 truncate max-w-[200px]" title={file.fileName}>
@@ -1445,29 +1556,50 @@ create policy "Users manage own files" on plt_files for all to authenticated usi
                         </td>
                         <td className="px-6 py-4 text-right">
                           <button 
-                            onClick={async () => {
-                              try {
-                                setOperationError(null);
-                                if (await dbService.deleteFile(file.id)) {
-                                  setFiles(files.filter(f => f.id !== file.id));
-                                } else {
-                                  throw new Error('Không thể xóa file này.');
+                            onClick={() => {
+                              setConfirmModal({
+                                show: true,
+                                title: 'Xoá lịch sử',
+                                message: `Bạn có chắc muốn xoá file "${file.fileName}" khỏi danh sách lịch sử? Dữ liệu này vẫn sẽ tồn tại trong phần Tổng quát.`,
+                                type: 'warning',
+                                onConfirm: async () => {
+                                  try {
+                                    setConfirmModal(prev => ({ ...prev, isLoading: true }));
+                                    setOperationError(null);
+                                    
+                                    setArchivedIds(prev => {
+                                      const next = new Set(prev);
+                                      next.add(file.id);
+                                      return next;
+                                    });
+
+                                    setSelectedHistoryIds(prev => {
+                                      const next = new Set(prev);
+                                      next.delete(file.id);
+                                      return next;
+                                    });
+                                    
+                                    setSuccessMessage(`Đã ẩn file khỏi lịch sử.`);
+                                  } catch (err: any) {
+                                    setOperationError('Lỗi khi thực hiện.');
+                                  } finally {
+                                    setConfirmModal({ show: false, title: '', message: '', onConfirm: () => {} });
+                                  }
                                 }
-                              } catch (err: any) {
-                                setOperationError(err?.message || 'Lỗi khi xóa file.');
-                              }
+                              });
                             }}
-                            className="text-gray-400 hover:text-red-600 transition-colors"
+                            className="text-gray-400 hover:text-red-500 transition-colors"
+                            title="Xoá lịch sử (Không mất dữ liệu tổng)"
                           >
                             <Trash2 size={18} />
                           </button>
                         </td>
                       </tr>
                     ))}
-                    {files.length === 0 && (
+                    {historyFiles.length === 0 && (
                       <tr>
-                        <td colSpan={6} className="px-6 py-12 text-center text-gray-400 italic">
-                          Chưa có dữ liệu lịch sử.
+                        <td colSpan={7} className="px-6 py-12 text-center text-gray-400 italic">
+                          Chưa có dữ liệu lịch sử hoặc tất cả đã được lưu vào tổng quát.
                         </td>
                       </tr>
                     )}
@@ -1543,6 +1675,43 @@ create policy "Users manage own files" on plt_files for all to authenticated usi
                           >
                             <FileText size={16} />
                           </button>
+                          <button 
+                            onClick={() => {
+                              setConfirmModal({
+                                show: true,
+                                title: 'Xác nhận xoá vĩnh viễn',
+                                message: `Bạn có muốn xoá VĨNH VIỄN ${customerFiles.length} sơ đồ của khách hàng ${customer.name} trong tháng này? Thao tác này sẽ làm giảm tổng kích thước trong báo cáo.`,
+                                type: 'danger',
+                                onConfirm: async () => {
+                                  setIsProcessing(true);
+                                  setConfirmModal(prev => ({ ...prev, isLoading: true }));
+                                  try {
+                                    let successCount = 0;
+                                    for (const f of customerFiles) {
+                                      if (await dbService.deleteFile(f.id)) successCount++;
+                                    }
+                                    const deletedIds = new Set(customerFiles.map(f => f.id));
+                                    setFiles(prev => prev.filter(f => !deletedIds.has(f.id)));
+                                    setSelectedHistoryIds(prev => {
+                                      const next = new Set(prev);
+                                      deletedIds.forEach(id => next.delete(id));
+                                      return next;
+                                    });
+                                    setSuccessMessage(`Đã xoá ${successCount} sơ đồ của ${customer.name} thành công.`);
+                                  } catch (err) {
+                                    setOperationError('Lỗi khi xoá dữ liệu hàng loạt.');
+                                  } finally {
+                                    setIsProcessing(false);
+                                    setConfirmModal({ show: false, title: '', message: '', onConfirm: () => {} });
+                                  }
+                                }
+                              });
+                            }}
+                            className="p-1.5 hover:bg-red-500 hover:text-white rounded-lg transition-colors pointer-events-auto text-blue-100"
+                            title="Xoá lịch sử tháng này"
+                          >
+                            <Trash2 size={16} />
+                          </button>
                           <span className="bg-white/20 px-2 py-0.5 rounded text-[10px] font-bold uppercase">
                             {totalCount} sơ đồ
                           </span>
@@ -1589,9 +1758,42 @@ create policy "Users manage own files" on plt_files for all to authenticated usi
                               {isExpanded && (
                                 <div className="mt-2 ml-6 space-y-2 bg-gray-50 p-2 rounded-lg border border-gray-100">
                                   {stats.files.map(f => (
-                                    <div key={f.id} className="flex justify-between items-start gap-2 text-[11px]">
-                                      <span className="text-gray-600 break-all flex-1" title={f.fileName}>{f.fileName}</span>
-                                      <span className="font-bold text-blue-700 whitespace-nowrap">{f.adjustedLength.toFixed(2)}m</span>
+                                    <div key={f.id} className="flex justify-between items-center gap-2 group/file">
+                                      <span className="text-[11px] text-gray-600 break-all flex-1" title={f.fileName}>{f.fileName}</span>
+                                      <div className="flex items-center gap-2">
+                                        <span className="text-[11px] font-bold text-blue-700 whitespace-nowrap">{f.adjustedLength.toFixed(2)}m</span>
+                                        <button 
+                                          onClick={(e) => {
+                                            e.stopPropagation();
+                                            setConfirmModal({
+                                              show: true,
+                                              title: 'Xoá vĩnh viễn',
+                                              message: `Xoá file "${f.fileName}" vĩnh viễn khỏi hệ thống? Thao tác này sẽ làm thay đổi số liệu tổng quát.`,
+                                              type: 'danger',
+                                              onConfirm: async () => {
+                                                try {
+                                                  setConfirmModal(prev => ({ ...prev, isLoading: true }));
+                                                  if (await dbService.deleteFile(f.id)) {
+                                                    setFiles(prev => prev.filter(file => file.id !== f.id));
+                                                    setSelectedHistoryIds(prev => {
+                                                      const next = new Set(prev);
+                                                      next.delete(f.id);
+                                                      return next;
+                                                    });
+                                                  }
+                                                } catch (err) {
+                                                  setOperationError('Lỗi khi xoá vĩnh viễn.');
+                                                } finally {
+                                                  setConfirmModal({ show: false, title: '', message: '', onConfirm: () => {} });
+                                                }
+                                              }
+                                            });
+                                          }}
+                                          className="p-1 text-gray-400 hover:text-red-500 opacity-0 group-hover/file:opacity-100 transition-all"
+                                        >
+                                          <Trash2 size={12} />
+                                        </button>
+                                      </div>
                                     </div>
                                   ))}
                                 </div>
@@ -1915,6 +2117,65 @@ create policy "Users manage own files" on plt_files for all to authenticated usi
           background: #cbd5e1;
         }
       `}</style>
+
+      {/* Confirmation Modal */}
+      <AnimatePresence>
+        {confirmModal.show && (
+          <div className="fixed inset-0 z-[100] flex items-center justify-center p-4">
+            <motion.div 
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={() => !confirmModal.isLoading && setConfirmModal(prev => ({ ...prev, show: false }))}
+              className="absolute inset-0 bg-black/40 backdrop-blur-sm"
+            />
+            <motion.div 
+              initial={{ opacity: 0, scale: 0.95, y: 20 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.95, y: 20 }}
+              className="relative bg-white rounded-2xl shadow-2xl w-full max-w-sm overflow-hidden"
+            >
+              <div className="p-6">
+                <div className={`w-12 h-12 rounded-full flex items-center justify-center mb-4 ${
+                  confirmModal.type === 'danger' ? 'bg-red-50 text-red-600' : 
+                  confirmModal.type === 'warning' ? 'bg-amber-50 text-amber-600' : 
+                  'bg-blue-50 text-blue-600'
+                }`}>
+                  {confirmModal.type === 'danger' ? <Trash2 size={24} /> : 
+                   confirmModal.type === 'warning' ? <AlertTriangle size={24} /> : 
+                   <Info size={24} />}
+                </div>
+                <h3 className="text-xl font-bold text-gray-900 mb-2">{confirmModal.title}</h3>
+                <p className="text-gray-500 text-sm leading-relaxed">{confirmModal.message}</p>
+              </div>
+              <div className="p-4 bg-gray-50 flex gap-3">
+                <button
+                  disabled={confirmModal.isLoading}
+                  onClick={() => setConfirmModal(prev => ({ ...prev, show: false }))}
+                  className="flex-1 py-2.5 px-4 bg-white border border-gray-200 text-gray-700 font-bold rounded-xl hover:bg-gray-50 transition-colors disabled:opacity-50"
+                >
+                  Huỷ
+                </button>
+                <button
+                  disabled={confirmModal.isLoading}
+                  onClick={confirmModal.onConfirm}
+                  className={`flex-1 py-2.5 px-4 border border-transparent text-white font-bold rounded-xl shadow-lg transition-all flex items-center justify-center gap-2 disabled:opacity-70 ${
+                    confirmModal.type === 'danger' ? 'bg-red-600 hover:bg-red-700 shadow-red-100' : 
+                    confirmModal.type === 'warning' ? 'bg-amber-600 hover:bg-amber-700 shadow-amber-100' : 
+                    'bg-blue-600 hover:bg-blue-700 shadow-blue-100'
+                  }`}
+                >
+                  {confirmModal.isLoading ? (
+                    <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                  ) : (
+                    'Xác nhận'
+                  )}
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
     </div>
   );
 }
