@@ -29,7 +29,11 @@ import {
   eachDayOfInterval, 
   isSameDay,
   subMonths,
-  addMonths
+  addMonths,
+  addDays,
+  subDays,
+  addYears,
+  subYears
 } from 'date-fns';
 import { vi } from 'date-fns/locale';
 import { AnimatePresence, motion } from 'motion/react';
@@ -142,7 +146,8 @@ export default function App() {
     show: boolean;
     customerName: string;
     dateLabel: string;
-    files: PLTFileRecord[];
+    periodType: 'day' | 'month' | 'year';
+    selectedDate: Date;
     unitPrice: string;
     designItems: {
       name: string;
@@ -154,7 +159,8 @@ export default function App() {
     show: false, 
     customerName: '', 
     dateLabel: '', 
-    files: [], 
+    periodType: 'month',
+    selectedDate: new Date(),
     unitPrice: '',
     designItems: [] 
   });
@@ -190,6 +196,23 @@ export default function App() {
   }, [operationError, successMessage]);
 
   const historyFiles = useMemo(() => files.filter(f => !archivedIds.has(f.id)), [files, archivedIds]);
+
+  const invoiceFiles = useMemo(() => {
+    if (!invoiceModal.show || !invoiceModal.customerName) return [];
+    
+    return files.filter(f => {
+      if (f.customerName !== invoiceModal.customerName) return false;
+      const fileDateParsed = parseISO(f.fileDate);
+      
+      if (invoiceModal.periodType === 'day') {
+        return format(fileDateParsed, 'dd/MM/yyyy') === format(invoiceModal.selectedDate, 'dd/MM/yyyy');
+      } else if (invoiceModal.periodType === 'month') {
+        return format(fileDateParsed, 'MM/yyyy') === format(invoiceModal.selectedDate, 'MM/yyyy');
+      } else {
+        return format(fileDateParsed, 'yyyy') === format(invoiceModal.selectedDate, 'yyyy');
+      }
+    });
+  }, [files, invoiceModal.show, invoiceModal.customerName, invoiceModal.periodType, invoiceModal.selectedDate]);
   
   // Pending files to be classified
   const [pendingFiles, setPendingFiles] = useState<{
@@ -454,12 +477,13 @@ export default function App() {
     }
   };
 
-  const handleExportInvoice = (customerName: string, dateLabel: string, fileList: PLTFileRecord[]) => {
+  const handleExportInvoice = (customerName: string, refDate: Date = currentMonth, initialPeriod: 'day' | 'month' | 'year' = 'month') => {
     setInvoiceModal({
       show: true,
       customerName,
-      dateLabel,
-      files: fileList,
+      dateLabel: '',
+      periodType: initialPeriod,
+      selectedDate: refDate,
       unitPrice: '',
       designItems: []
     });
@@ -467,18 +491,24 @@ export default function App() {
 
   const confirmExportInvoice = async () => {
     const unitPriceValue = invoiceModal.unitPrice ? parseInt(invoiceModal.unitPrice.replace(/\D/g, ''), 10) : undefined;
+    const dateLabel = invoiceModal.periodType === 'day' 
+      ? `Ngày ${format(invoiceModal.selectedDate, 'dd/MM/yyyy')}`
+      : invoiceModal.periodType === 'month' 
+      ? `Tháng ${format(invoiceModal.selectedDate, 'MM/yyyy')}`
+      : `Năm ${format(invoiceModal.selectedDate, 'yyyy')}`;
     
     try {
       await pdfService.generateInvoice({
         customerName: invoiceModal.customerName,
-        date: invoiceModal.dateLabel,
-        files: invoiceModal.files.map(f => ({
+        date: dateLabel,
+        files: invoiceFiles.map(f => ({
           fileName: f.fileName,
           width: f.originalWidth,
           length: f.originalLength,
-          adjustedLength: f.adjustedLength
+          adjustedLength: f.adjustedLength,
+          fileDate: f.fileDate
         })),
-        totalLength: invoiceModal.files.reduce((acc, f) => acc + f.adjustedLength, 0),
+        totalLength: invoiceFiles.reduce((acc, f) => acc + f.adjustedLength, 0),
         unitPrice: unitPriceValue,
         designItems: invoiceModal.designItems.map(item => ({
           name: item.name,
@@ -498,18 +528,24 @@ export default function App() {
 
   const confirmExportExcel = async () => {
     const unitPriceValue = invoiceModal.unitPrice ? parseInt(invoiceModal.unitPrice.replace(/\D/g, ''), 10) : undefined;
+    const dateLabel = invoiceModal.periodType === 'day' 
+      ? `Ngày ${format(invoiceModal.selectedDate, 'dd/MM/yyyy')}`
+      : invoiceModal.periodType === 'month' 
+      ? `Tháng ${format(invoiceModal.selectedDate, 'MM/yyyy')}`
+      : `Năm ${format(invoiceModal.selectedDate, 'yyyy')}`;
     
     try {
       excelService.generateInvoice({
         customerName: invoiceModal.customerName,
-        date: invoiceModal.dateLabel,
-        files: invoiceModal.files.map(f => ({
+        date: dateLabel,
+        files: invoiceFiles.map(f => ({
           fileName: f.fileName,
           width: f.originalWidth,
           length: f.originalLength,
-          adjustedLength: f.adjustedLength
+          adjustedLength: f.adjustedLength,
+          fileDate: f.fileDate
         })),
-        totalLength: invoiceModal.files.reduce((acc, f) => acc + f.adjustedLength, 0),
+        totalLength: invoiceFiles.reduce((acc, f) => acc + f.adjustedLength, 0),
         unitPrice: unitPriceValue,
         designItems: invoiceModal.designItems.map(item => ({
           name: item.name,
@@ -1669,7 +1705,7 @@ create policy "Users manage own files" on plt_files for all to authenticated usi
                         <h3 className="font-bold text-lg truncate flex-1" title={customer.name}>{customer.name}</h3>
                         <div className="flex items-center gap-2">
                           <button 
-                            onClick={() => handleExportInvoice(customer.name, `Tháng ${format(currentMonth, 'MM/yyyy')}`, customerFiles)}
+                            onClick={() => handleExportInvoice(customer.name, currentMonth, 'month')}
                             className="p-1.5 hover:bg-white/20 rounded-lg transition-colors pointer-events-auto"
                             title="Xuất hoá đơn tháng"
                           >
@@ -1743,7 +1779,9 @@ create policy "Users manage own files" on plt_files for all to authenticated usi
                                     <button 
                                       onClick={(e) => {
                                         e.stopPropagation();
-                                        handleExportInvoice(customer.name, `Ngày ${day}/${format(currentMonth, 'yyyy')}`, stats.files);
+                                        const [d, m] = day.split('/').map(Number);
+                                        const refDate = new Date(currentMonth.getFullYear(), m - 1, d);
+                                        handleExportInvoice(customer.name, refDate, 'day');
                                       }}
                                       className="p-1.5 text-gray-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"
                                       title="Xuất hoá đơn ngày"
@@ -1920,32 +1958,119 @@ create policy "Users manage own files" on plt_files for all to authenticated usi
                   </button>
                 </div>
 
-                <div className="space-y-6">
+                 <div className="space-y-6">
+                  {/* Period selection tabs */}
+                  <div>
+                    <span className="block text-[10px] font-bold text-gray-400 uppercase mb-2 tracking-wider">Chọn kỳ thanh toán</span>
+                    <div className="flex bg-gray-100 p-1 rounded-xl">
+                      {([
+                        { id: 'day', label: 'Từng Ngày' },
+                        { id: 'month', label: 'Cả Tháng' },
+                        { id: 'year', label: 'Cả Năm' }
+                      ] as const).map(tab => (
+                        <button
+                          key={tab.id}
+                          type="button"
+                          onClick={() => setInvoiceModal(prev => ({ ...prev, periodType: tab.id }))}
+                          className={`flex-1 py-2 text-xs font-bold rounded-lg transition-all ${
+                            invoiceModal.periodType === tab.id 
+                              ? 'bg-white text-blue-600 shadow-sm' 
+                              : 'text-gray-500 hover:text-gray-900 hover:bg-white/40'
+                          }`}
+                        >
+                          {tab.label}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* Period Navigator inside Modal */}
+                  <div className="flex items-center justify-between bg-blue-50/50 p-3 rounded-xl border border-blue-100/35">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setInvoiceModal(prev => {
+                          let nextDate = prev.selectedDate;
+                          if (prev.periodType === 'day') nextDate = subDays(prev.selectedDate, 1);
+                          else if (prev.periodType === 'month') nextDate = subMonths(prev.selectedDate, 1);
+                          else nextDate = subYears(prev.selectedDate, 1);
+                          return { ...prev, selectedDate: nextDate };
+                        });
+                      }}
+                      className="p-1.5 bg-white hover:bg-gray-100 rounded-lg border border-gray-200 transition-colors shadow-xs"
+                    >
+                      <ChevronRight size={16} className="rotate-180 text-gray-650" />
+                    </button>
+                    
+                    <div className="text-center">
+                      <span className="block text-[10px] font-bold text-blue-400 uppercase tracking-widest">Thời gian xuất</span>
+                      <span className="text-sm font-extrabold text-blue-900 font-mono">
+                        {invoiceModal.periodType === 'day' && format(invoiceModal.selectedDate, 'dd/MM/yyyy')}
+                        {invoiceModal.periodType === 'month' && format(invoiceModal.selectedDate, 'MM/yyyy')}
+                        {invoiceModal.periodType === 'year' && format(invoiceModal.selectedDate, 'yyyy')}
+                      </span>
+                    </div>
+
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setInvoiceModal(prev => {
+                          let nextDate = prev.selectedDate;
+                          if (prev.periodType === 'day') nextDate = addDays(prev.selectedDate, 1);
+                          else if (prev.periodType === 'month') nextDate = addMonths(prev.selectedDate, 1);
+                          else nextDate = addYears(prev.selectedDate, 1);
+                          return { ...prev, selectedDate: nextDate };
+                        });
+                      }}
+                      className="p-1.5 bg-white hover:bg-gray-100 rounded-lg border border-gray-200 transition-colors shadow-xs"
+                    >
+                      <ChevronRight size={16} className="text-gray-650" />
+                    </button>
+                  </div>
+
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                    <div className="bg-blue-50 p-4 rounded-xl border border-blue-100">
-                      <h4 className="text-[10px] font-bold text-blue-400 uppercase tracking-wider mb-2">Thông tin khách hàng</h4>
+                    <div className="bg-gray-50 p-4 rounded-xl border border-gray-200/60">
+                      <h4 className="text-[10px] font-bold text-gray-400 uppercase tracking-wider mb-2">Thông tin khách hàng</h4>
                       <div className="flex justify-between mb-1">
-                        <span className="text-xs text-blue-700">Tên:</span>
-                        <span className="text-sm font-bold text-blue-900">{invoiceModal.customerName}</span>
+                        <span className="text-xs text-gray-500">Tên khách:</span>
+                        <span className="text-sm font-extrabold text-gray-900">{invoiceModal.customerName}</span>
                       </div>
                       <div className="flex justify-between">
-                        <span className="text-xs text-blue-700">Kỳ dữ liệu:</span>
-                        <span className="text-sm font-bold text-blue-900">{invoiceModal.dateLabel}</span>
+                        <span className="text-xs text-gray-500">Loại kỳ hóa đơn:</span>
+                        <span className="text-xs font-bold text-indigo-600 bg-indigo-50 px-2 py-0.5 rounded-full">
+                          {invoiceModal.periodType === 'day' && 'Từng Ngày'}
+                          {invoiceModal.periodType === 'month' && 'Cả Tháng'}
+                          {invoiceModal.periodType === 'year' && 'Cả Năm'}
+                        </span>
                       </div>
                     </div>
 
-                    <div className="bg-gray-50 p-4 rounded-xl border border-gray-200">
-                      <h4 className="text-[10px] font-bold text-gray-400 uppercase tracking-wider mb-2">Dữ liệu in ấn</h4>
-                      <div className="flex justify-between mb-1">
-                        <span className="text-xs text-gray-500">Số lượng file:</span>
-                        <span className="text-sm font-bold text-gray-900">{invoiceModal.files.length}</span>
-                      </div>
-                      <div className="flex justify-between">
-                        <span className="text-xs text-gray-500">Tổng dài:</span>
-                        <span className="text-sm font-bold text-gray-900">
-                          {invoiceModal.files.reduce((acc, f) => acc + f.adjustedLength, 0).toFixed(2)}m
-                        </span>
-                      </div>
+                    <div className={`p-4 rounded-xl border transition-colors duration-200 ${
+                      invoiceFiles.length > 0 
+                        ? 'bg-emerald-50/50 border-emerald-100' 
+                        : 'bg-amber-50/40 border-amber-100'
+                    }`}>
+                      <h4 className={`text-[10px] font-bold uppercase tracking-wider mb-2 ${
+                        invoiceFiles.length > 0 ? 'text-emerald-500' : 'text-amber-500'
+                      }`}>Dữ liệu in ấn</h4>
+                      
+                      {invoiceFiles.length > 0 ? (
+                        <div className="space-y-1">
+                          <div className="flex justify-between text-xs text-gray-600">
+                            <span>Số lượng file:</span>
+                            <span className="font-extrabold text-gray-900">{invoiceFiles.length} file</span>
+                          </div>
+                          <div className="flex justify-between text-xs text-gray-600">
+                            <span>Tổng chiều dài:</span>
+                            <span className="font-extrabold text-emerald-700">{invoiceFiles.reduce((acc, f) => acc + f.adjustedLength, 0).toFixed(2)}m</span>
+                          </div>
+                        </div>
+                      ) : (
+                        <div className="flex items-center gap-1.5 py-1 text-amber-700">
+                          <AlertTriangle size={14} className="shrink-0" />
+                          <span className="text-xs font-semibold">Thời gian này không có dữ liệu in!</span>
+                        </div>
+                      )}
                     </div>
                   </div>
 
@@ -2084,13 +2209,15 @@ create policy "Users manage own files" on plt_files for all to authenticated usi
                     </button>
                     <button 
                       onClick={confirmExportExcel}
-                      className="py-3 bg-green-600 hover:bg-green-700 text-white font-bold rounded-xl shadow-lg shadow-green-100 transition-all flex items-center justify-center gap-2"
+                      disabled={invoiceFiles.length === 0}
+                      className="py-3 bg-green-600 hover:bg-green-700 disabled:bg-gray-250 disabled:text-gray-400 disabled:shadow-none disabled:cursor-not-allowed text-white font-bold rounded-xl shadow-lg shadow-green-100 transition-all flex items-center justify-center gap-2"
                     >
                       <FileSpreadsheet size={18} /> Excel
                     </button>
                     <button 
                       onClick={confirmExportInvoice}
-                      className="col-span-2 lg:col-span-1 py-3 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-xl shadow-lg shadow-blue-100 transition-all flex items-center justify-center gap-2"
+                      disabled={invoiceFiles.length === 0}
+                      className="col-span-2 lg:col-span-1 py-3 bg-blue-600 hover:bg-blue-700 disabled:bg-gray-250 disabled:text-gray-400 disabled:shadow-none disabled:cursor-not-allowed text-white font-bold rounded-xl shadow-lg shadow-blue-100 transition-all flex items-center justify-center gap-2"
                     >
                       <Download size={18} /> Tải PDF
                     </button>
