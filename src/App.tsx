@@ -8,6 +8,7 @@ import {
   Plus, 
   Trash2, 
   AlertTriangle, 
+  Check,
   CheckCircle2,
   ChevronRight,
   Filter,
@@ -19,11 +20,15 @@ import {
   LogIn,
   FileText,
   FileSpreadsheet,
-  Image as ImageIcon
+  Image as ImageIcon,
+  Calendar,
+  RefreshCw,
+  CheckSquare
 } from 'lucide-react';
 import { 
   format, 
   parseISO, 
+  parse,
   startOfMonth, 
   endOfMonth, 
   eachDayOfInterval, 
@@ -58,9 +63,29 @@ import { User, Session } from '@supabase/supabase-js';
 
 // --- Helper: Extract Code from Filename ---
 const extractCode = (fileName: string): string => {
-  // Try to get the first part of the filename (before space, underscore, or dash)
-  const match = fileName.split(/[\s_-]+/)[0];
-  return match || fileName.split('.')[0];
+  // 1. Remove extension
+  let code = fileName.replace(/\.[a-zA-Z0-9]+$/g, '');
+  
+  // 2. Remove standard date patterns like dd-mm-yyyy, dd-mm-yy, dd_mm_yyyy, dd-mm, d_m
+  // e.g. 8-4, 08-04, 2026, 8_4, 08/04, 15_12_26
+  code = code.replace(/\b\d{1,2}[-_\/]\d{1,2}([-_\/]\d{2,4})?\b/g, '');
+  
+  // Remove isolated 4-digit years like 2025, 2026
+  code = code.replace(/\b\d{4}\b/g, '');
+
+  // Remove trailing/leading dates that don't have boundaries, e.g., "_0804" at end, or "0804_" at start
+  code = code.replace(/[-_]\d{3,4}$/g, '');
+  code = code.replace(/^\d{3,4}[-_]/g, '');
+
+  // 3. Replace multiple spaces, underscores, or dashes with single space
+  code = code.replace(/[\s-_\.]+/g, ' ').trim();
+  
+  // Fallback to original without extension if blank
+  if (!code) {
+    code = fileName.replace(/\.[a-zA-Z0-9]+$/g, '');
+  }
+  
+  return code;
 };
 
 // --- Components ---
@@ -221,12 +246,55 @@ export default function App() {
     code: string;
     suggestedCustomer: string;
     selectedCustomer: string;
+    fileDate: string; // ISO string
     dimensions?: { width: number; length: number; adjusted: any };
   }[]>([]);
+  const [uploadBehavior, setUploadBehavior] = useState<'append' | 'replace'>('append');
+  const [uploadDateMode, setUploadDateMode] = useState<'file_date' | 'custom_date'>('file_date');
+  const [customUploadDate, setCustomUploadDate] = useState<string>(format(new Date(), 'yyyy-MM-dd'));
+  const [bulkChangeDate, setBulkChangeDate] = useState<string>(format(new Date(), 'yyyy-MM-dd'));
   const [activeTagPanelId, setActiveTagPanelId] = useState<string | null>(null);
   const tagPanelRef = useRef<HTMLDivElement>(null);
   const [selectedPendingIds, setSelectedPendingIds] = useState<Set<string>>(new Set());
   const [bulkCustomerName, setBulkCustomerName] = useState('');
+  const savingTempIdsRef = useRef<Set<string>>(new Set());
+
+  const groupedPending = useMemo(() => {
+    const groups: { [key: string]: typeof pendingFiles } = {};
+    pendingFiles.forEach(item => {
+      let dateKey = 'Chưa rõ ngày';
+      try {
+        if (item.fileDate) {
+          const d = parseISO(item.fileDate);
+          dateKey = format(d, 'yyyy-MM-dd');
+        }
+      } catch (err) {
+        dateKey = format(new Date(), 'yyyy-MM-dd');
+      }
+      if (!groups[dateKey]) {
+        groups[dateKey] = [];
+      }
+      groups[dateKey].push(item);
+    });
+    
+    return Object.keys(groups)
+      .sort((a, b) => b.localeCompare(a))
+      .map(dateKey => {
+        let formattedDate = dateKey;
+        if (dateKey !== 'Chưa rõ ngày') {
+          try {
+            formattedDate = format(parse(dateKey, 'yyyy-MM-dd', new Date()), 'dd/MM/yyyy', { locale: vi });
+          } catch (e) {
+            formattedDate = dateKey;
+          }
+        }
+        return {
+          dateKey,
+          formattedDate,
+          items: groups[dateKey]
+        };
+      });
+  }, [pendingFiles]);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const folderInputRef = useRef<HTMLInputElement>(null);
@@ -241,6 +309,41 @@ export default function App() {
     document.addEventListener('mousedown', handleClickOutside);
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
+
+  // Helper: check if a file is duplicate (same name, original length, and original width on the same date)
+  const findDuplicateInfo = (
+    fileName: string,
+    width: number,
+    length: number,
+    fileDateISO: string
+  ) => {
+    let targetDate: Date;
+    try {
+      targetDate = parseISO(fileDateISO);
+    } catch {
+      targetDate = new Date();
+    }
+
+    // Check ONLY with stored files ("Tổng quát" - files already assigned and saved successfully in DB)
+    const dupInStored = files.find(f => {
+      let fDate: Date;
+      try {
+        fDate = parseISO(f.fileDate);
+      } catch {
+        return false;
+      }
+      return isSameDay(targetDate, fDate) &&
+        f.fileName.toLowerCase() === fileName.toLowerCase() &&
+        Math.abs(f.originalWidth - width) < 0.1 &&
+        Math.abs(f.originalLength - length) < 0.1;
+    });
+
+    if (dupInStored) {
+      return { type: 'stored', record: dupInStored };
+    }
+
+    return null;
+  };
 
   useEffect(() => {
     if (!user) return;
@@ -313,18 +416,26 @@ export default function App() {
   }
 
   const handleAddCustomer = async () => {
-    if (!newCustomerName.trim()) return;
-    if (customers.some(c => c.name.toLowerCase() === newCustomerName.trim().toLowerCase())) return;
+    const trimmedVal = newCustomerName.trim();
+    if (!trimmedVal) return;
+    
+    // Check if customer already exists (case-insensitive)
+    const existing = customers.find(c => c.name.toLowerCase() === trimmedVal.toLowerCase());
+    if (existing) {
+      setOperationError(`Khách hàng "${existing.name}" đã tồn tại trong danh sách!`);
+      return;
+    }
     
     try {
       setIsAddingCustomer(true);
       setOperationError(null);
-      const added = await dbService.addCustomer(newCustomerName.trim());
+      const added = await dbService.addCustomer(trimmedVal);
       setCustomers(prev => [...prev, added]);
       setNewCustomerName('');
+      setSuccessMessage(`Đã thêm khách hàng "${added.name}" thành công.`);
     } catch (err: any) {
       console.error('Error adding customer:', err);
-      setOperationError(err?.message || 'Lỗi khi thêm khách hàng.');
+      setOperationError(err?.message || 'Lỗi khi thêm khách hàng mới.');
     } finally {
       setIsAddingCustomer(false);
     }
@@ -359,26 +470,71 @@ export default function App() {
 
     setIsProcessing(true);
     const newPending: typeof pendingFiles = [];
+    const duplicateList: string[] = [];
+
+    let resolvedDateISO = '';
+    if (uploadDateMode === 'custom_date') {
+      try {
+        const parsedCustomDate = parse(customUploadDate, 'yyyy-MM-dd', new Date());
+        resolvedDateISO = parsedCustomDate.toISOString();
+      } catch (e) {
+        resolvedDateISO = new Date().toISOString();
+      }
+    }
 
     for (let i = 0; i < uploadedFiles.length; i++) {
       const file = uploadedFiles[i];
       if (!file.name.toLowerCase().endsWith('.plt') && !file.name.toLowerCase().endsWith('.hpgl') && !file.name.toLowerCase().endsWith('.hpg')) continue;
 
+      // Deduplicate inside the batch and pending queue
+      const isDuplicate = newPending.some(p => p.file.name.toLowerCase() === file.name.toLowerCase()) ||
+                          pendingFiles.some(p => p.file.name.toLowerCase() === file.name.toLowerCase());
+      if (isDuplicate) {
+        console.log(`Skipping duplicate file in selection: ${file.name}`);
+        continue;
+      }
+
       const code = extractCode(file.name);
-      const mapping = codeMappings.find(m => m.code === code);
-      const suggested = mapping ? mapping.customerName : '';
+      
+      // Intelligent robust mapping lookup
+      let suggested = '';
+      const exactMapping = codeMappings.find(m => m.code.toLowerCase() === code.toLowerCase());
+      if (exactMapping) {
+        suggested = exactMapping.customerName;
+      } else {
+        const sortedMappings = [...codeMappings].sort((a, b) => b.code.length - a.code.length);
+        const codeLower = code.toLowerCase();
+        const substringMapping = sortedMappings.find(m => {
+          const mCodeLower = m.code.toLowerCase();
+          if (mCodeLower.length < 3) return false;
+          return codeLower.includes(mCodeLower) || mCodeLower.includes(codeLower);
+        });
+        if (substringMapping) {
+          suggested = substringMapping.customerName;
+        }
+      }
+
+      const isInitiallyAutoFilled = suggested !== '';
 
       try {
         const content = await file.text();
         const { width, length } = parsePLT(content);
         const adjusted = calculateAdjustedDimensions(width, length);
 
+        let itemDate = resolvedDateISO;
+        if (uploadDateMode === 'file_date') {
+          itemDate = new Date(file.lastModified || Date.now()).toISOString();
+        }
+
+        // No auto-removal of duplicates here. We parse and keep files in the queue
         newPending.push({
           tempId: crypto.randomUUID(),
           file,
           code,
           suggestedCustomer: suggested,
           selectedCustomer: suggested,
+          fileDate: itemDate,
+          isAutoFilled: isInitiallyAutoFilled,
           dimensions: { width, length, adjusted }
         });
       } catch (error) {
@@ -386,19 +542,26 @@ export default function App() {
       }
     }
 
-    setPendingFiles(prev => [...prev, ...newPending]);
+    if (uploadBehavior === 'replace') {
+      setPendingFiles(newPending);
+      setSelectedPendingIds(new Set(newPending.map(p => p.tempId)));
+    } else {
+      setPendingFiles(prev => [...prev, ...newPending]);
+    }
+    
     setIsProcessing(false);
     if (fileInputRef.current) fileInputRef.current.value = '';
     if (folderInputRef.current) folderInputRef.current.value = '';
   };
 
   const handleBulkAssign = async () => {
-    if (!bulkCustomerName.trim() || selectedPendingIds.size === 0) return;
+    if (isProcessing || !bulkCustomerName.trim() || selectedPendingIds.size === 0) return;
     
     const trimmedName = bulkCustomerName.trim();
     const successfulTempIds: string[] = [];
     const newRecords: PLTFileRecord[] = [];
     const addedMappings: { code: string, customerName: string }[] = [];
+    const skippedFiles: string[] = [];
 
     setIsProcessing(true);
     setOperationError(null);
@@ -415,6 +578,11 @@ export default function App() {
         const pending = pendingFiles.find(p => p.tempId === (tempId as string));
         if (!pending || !pending.dimensions) continue;
 
+        if (savingTempIdsRef.current.has(pending.tempId)) {
+          continue;
+        }
+        savingTempIdsRef.current.add(pending.tempId);
+
         try {
           // Update mapping
           await dbService.updateMapping(pending.code, trimmedName);
@@ -428,13 +596,14 @@ export default function App() {
             originalLength: pending.dimensions.length,
             adjustedLength: pending.dimensions.adjusted.adjustedLength,
             isOverWidth: pending.dimensions.adjusted.isOverWidth,
-            fileDate: new Date(pending.file.lastModified).toISOString()
+            fileDate: pending.fileDate
           });
           
           newRecords.push(addedFile);
           successfulTempIds.push(tempId as string);
         } catch (fileErr) {
           console.error(`Error processing bulk file ${pending.file.name}:`, fileErr);
+          savingTempIdsRef.current.delete(pending.tempId);
         }
       }
 
@@ -442,6 +611,7 @@ export default function App() {
         setFiles(prev => [...newRecords, ...prev].sort((a, b) => 
           new Date(b.fileDate).getTime() - new Date(a.fileDate).getTime()
         ));
+        
         setSuccessMessage(`Đã gán và lưu thành công ${newRecords.length} sơ đồ.`);
       }
 
@@ -466,6 +636,7 @@ export default function App() {
       setOperationError('Lỗi khi xử lý gán hàng loạt.');
     } finally {
       setIsProcessing(false);
+      pendingFiles.forEach(p => savingTempIdsRef.current.delete(p.tempId));
     }
   };
 
@@ -611,9 +782,12 @@ export default function App() {
   };
 
   const handleConfirmClassification = async () => {
+    if (isProcessing) return;
+
     const newRecords: PLTFileRecord[] = [];
     const addedMappings: { code: string, customerName: string }[] = [];
     const successfulTempIds: string[] = [];
+    const skippedFiles: string[] = [];
 
     setIsProcessing(true);
     setOperationError(null);
@@ -622,7 +796,12 @@ export default function App() {
     try {
       for (const pending of pendingFiles) {
         const trimmedName = pending.selectedCustomer.trim();
-        if (!trimmedName) continue;
+        if (!trimmedName || !pending.dimensions) continue;
+
+        if (savingTempIdsRef.current.has(pending.tempId)) {
+          continue;
+        }
+        savingTempIdsRef.current.add(pending.tempId);
 
         try {
           // Add to customers if new
@@ -636,21 +815,20 @@ export default function App() {
           addedMappings.push({ code: pending.code, customerName: trimmedName });
 
           // Add to records in DB
-          if (pending.dimensions) {
-            const addedFile = await dbService.addFile({
-              fileName: pending.file.name,
-              customerName: trimmedName,
-              originalWidth: pending.dimensions.width,
-              originalLength: pending.dimensions.length,
-              adjustedLength: pending.dimensions.adjusted.adjustedLength,
-              isOverWidth: pending.dimensions.adjusted.isOverWidth,
-              fileDate: new Date(pending.file.lastModified).toISOString()
-            });
-            newRecords.push(addedFile);
-            successfulTempIds.push(pending.tempId);
-          }
+          const addedFile = await dbService.addFile({
+            fileName: pending.file.name,
+            customerName: trimmedName,
+            originalWidth: pending.dimensions.width,
+            originalLength: pending.dimensions.length,
+            adjustedLength: pending.dimensions.adjusted.adjustedLength,
+            isOverWidth: pending.dimensions.adjusted.isOverWidth,
+            fileDate: pending.fileDate
+          });
+          newRecords.push(addedFile);
+          successfulTempIds.push(pending.tempId);
         } catch (fileErr) {
           console.error(`Error processing file ${pending.file.name}:`, fileErr);
+          savingTempIdsRef.current.delete(pending.tempId);
         }
       }
 
@@ -681,22 +859,31 @@ export default function App() {
       });
 
       if (successfulTempIds.length < pendingFiles.length && successfulTempIds.length > 0) {
-        setOperationError(`Lưu được ${successfulTempIds.length} file, còn ${pendingFiles.length - successfulTempIds.length} file gặp lỗi.`);
+        setOperationError(`Lưu được ${successfulTempIds.length} file, còn ${pendingFiles.length - successfulTempIds.length} file chưa có thông tin khách hàng hoặc gặp lỗi.`);
       }
     } catch (err: any) {
       console.error('Error confirming classification:', err);
       setOperationError('Đã có lỗi xảy ra trong quá trình lưu dữ liệu.');
     } finally {
       setIsProcessing(false);
+      pendingFiles.forEach(p => savingTempIdsRef.current.delete(p.tempId));
     }
   };
 
-  const updatePendingCustomer = (index: number, customerName: string) => {
-    setPendingFiles(prev => {
-      const next = [...prev];
-      next[index].selectedCustomer = customerName;
-      return next;
-    });
+  const updatePendingCustomerById = (tempId: string, customerName: string, isAutoFilled?: boolean) => {
+    setPendingFiles(prev => prev.map(p => 
+      p.tempId === tempId ? { ...p, selectedCustomer: customerName, isAutoFilled: isAutoFilled !== undefined ? isAutoFilled : false } : p
+    ));
+  };
+
+  const updatePendingDateById = (tempId: string, newDateISO: string) => {
+    const pending = pendingFiles.find(p => p.tempId === tempId);
+    if (!pending || !pending.dimensions) return;
+
+    setPendingFiles(prev => prev.map(p => 
+      p.tempId === tempId ? { ...p, fileDate: newDateISO } : p
+    ));
+    setSuccessMessage('Đã cập nhật ngày thành công.');
   };
 
   const updateFileCustomer = async (fileId: string, newCustomerName: string) => {
@@ -724,10 +911,16 @@ export default function App() {
 
   const handleSaveSingleFile = async (tempId: string) => {
     const pending = pendingFiles.find(p => p.tempId === tempId);
-    if (!pending || !pending.selectedCustomer.trim()) return;
+    if (!pending || !pending.selectedCustomer.trim() || !pending.dimensions) return;
+
+    if (savingTempIdsRef.current.has(tempId)) {
+      console.log('Skipping concurrent save for file:', pending.file.name);
+      return;
+    }
+    savingTempIdsRef.current.add(tempId);
 
     const trimmedName = pending.selectedCustomer.trim();
-    
+
     try {
       setIsProcessing(true);
       setOperationError(null);
@@ -758,7 +951,7 @@ export default function App() {
         originalLength: pending.dimensions!.length,
         adjustedLength: pending.dimensions!.adjusted.adjustedLength,
         isOverWidth: pending.dimensions!.adjusted.isOverWidth,
-        fileDate: new Date(pending.file.lastModified).toISOString()
+        fileDate: pending.fileDate
       });
   
       setFiles(prev => [addedFile, ...prev].sort((a, b) => 
@@ -777,6 +970,7 @@ export default function App() {
       setOperationError('Lỗi khi lưu file này. Vui lòng thử lại.');
     } finally {
       setIsProcessing(false);
+      savingTempIdsRef.current.delete(tempId);
     }
   };
 
@@ -849,7 +1043,7 @@ export default function App() {
     });
 
     const customerStats = customers.map(c => {
-      const customerFiles = monthlyFiles.filter(f => f.customerName === c.name);
+      const customerFiles = monthlyFiles.filter(f => f.customerName && c && f.customerName.trim().toLowerCase() === c.name.trim().toLowerCase());
       const totalLength = customerFiles.reduce((acc, f) => acc + f.adjustedLength, 0);
       return {
         name: c.name,
@@ -1145,10 +1339,79 @@ create policy "Users manage own files" on plt_files for all to authenticated usi
                 </div>
 
                 <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-200">
-                  <h2 className="text-lg font-semibold mb-4 flex items-center gap-2">
+                  <h2 className="text-lg font-semibold mb-3 flex items-center gap-2">
                     <FileUp size={20} className="text-blue-600" />
                     Nhập File PLT / HPGL / HPG
                   </h2>
+
+                  {/* Upload Settings Widget */}
+                  <div className="mb-4 bg-gray-50 p-3.5 rounded-xl border border-gray-200/60 space-y-3.5">
+                    <div>
+                      <span className="block text-[10px] font-bold text-gray-450 uppercase tracking-wider mb-2">Mỗi lần tải file mới lên:</span>
+                      <div className="grid grid-cols-2 gap-2 bg-gray-100 p-0.5 rounded-lg">
+                        <button
+                          type="button"
+                          onClick={() => setUploadBehavior('append')}
+                          className={`py-1.5 text-[11px] font-bold rounded-md transition-all ${
+                            uploadBehavior === 'append'
+                              ? 'bg-white text-blue-600 shadow-xs'
+                              : 'text-gray-500 hover:text-gray-800'
+                          }`}
+                        >
+                          Cộng dồn (+)
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setUploadBehavior('replace')}
+                          className={`py-1.5 text-[11px] font-bold rounded-md transition-all ${
+                            uploadBehavior === 'replace'
+                              ? 'bg-white text-red-600 shadow-xs'
+                              : 'text-gray-500 hover:text-gray-800'
+                          }`}
+                        >
+                          Làm mới (Reset)
+                        </button>
+                      </div>
+                    </div>
+
+                    <div>
+                      <span className="block text-[10px] font-bold text-gray-450 uppercase tracking-wider mb-1.5">Cách gán ngày cho file mới:</span>
+                      <div className="flex flex-col gap-2">
+                        <label className="flex items-center gap-2 cursor-pointer">
+                          <input
+                            type="radio"
+                            name="uploadDateMode"
+                            checked={uploadDateMode === 'file_date'}
+                            onChange={() => setUploadDateMode('file_date')}
+                            className="w-3.5 h-3.5 text-blue-600 focus:ring-blue-500 rounded-full border-gray-300"
+                          />
+                          <span className="text-xs text-gray-600 font-medium">Sử dụng ngày gốc của file</span>
+                        </label>
+                        <label className="flex items-center gap-2 cursor-pointer">
+                          <input
+                            type="radio"
+                            name="uploadDateMode"
+                            checked={uploadDateMode === 'custom_date'}
+                            onChange={() => setUploadDateMode('custom_date')}
+                            className="w-3.5 h-3.5 text-blue-600 focus:ring-blue-500 rounded-full border-gray-300"
+                          />
+                          <span className="text-xs text-gray-600 font-medium">Gán một ngày cụ thể</span>
+                        </label>
+                        
+                        {uploadDateMode === 'custom_date' && (
+                          <div className="mt-1 animate-in fade-in duration-205">
+                            <input
+                              type="date"
+                              value={customUploadDate}
+                              onChange={(e) => setCustomUploadDate(e.target.value)}
+                              className="w-full px-2.5 py-1.5 border border-gray-300 rounded-lg text-xs outline-none focus:ring-2 focus:ring-blue-500 bg-white text-gray-800 font-bold"
+                            />
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+
                   <div className="grid grid-cols-1 gap-3">
                     <div 
                       onClick={() => fileInputRef.current?.click()}
@@ -1199,16 +1462,42 @@ create policy "Users manage own files" on plt_files for all to authenticated usi
               <div className="lg:col-span-2">
                 <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
                   <div className="p-6 border-b border-gray-100 flex flex-col gap-4 bg-white">
-                    <div className="flex justify-between items-center">
-                      <h2 className="text-lg font-semibold">Phân loại & Xác nhận</h2>
-                      {pendingFiles.length > 0 && (
-                        <button 
-                          onClick={handleConfirmClassification}
-                          className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors font-medium shadow-sm"
-                        >
-                          <Save size={18} />
-                          Lưu {pendingFiles.length} file
-                        </button>
+                    <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+                      <h2 className="text-lg font-semibold flex items-center gap-2">
+                        <span>Phân loại & Xác nhận</span>
+                        {pendingFiles.length > 0 && (
+                          <span className="text-xs font-bold text-blue-600 bg-blue-50 px-2.5 py-1 rounded-full border border-blue-100/50 animate-pulse">
+                            {pendingFiles.length} file chờ
+                          </span>
+                        )}
+                      </h2>
+                       {pendingFiles.length > 0 && (
+                        <div className="flex items-center gap-2">
+                          <button
+                            type="button"
+                            disabled={isProcessing}
+                            onClick={() => {
+                              setPendingFiles([]);
+                              setSelectedPendingIds(new Set());
+                              setSuccessMessage('Đã xoá sạch danh sách chờ gán.');
+                            }}
+                            className="flex items-center gap-1.5 px-3 py-2 border border-red-200 text-red-600 rounded-lg hover:bg-red-50 transition-all text-xs font-semibold shadow-xs cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+                            title="Xoá toàn bộ file trong danh sách phân loại hiện tại"
+                          >
+                            <RefreshCw size={14} />
+                            Xoá danh sách
+                          </button>
+                          
+                          <button 
+                            type="button"
+                            disabled={isProcessing}
+                            onClick={handleConfirmClassification}
+                            className="flex items-center gap-1.5 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-all text-xs font-bold shadow-sm cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+                          >
+                            <CheckSquare size={14} />
+                            Lưu tất cả ({pendingFiles.length} file)
+                          </button>
+                        </div>
                       )}
                     </div>
 
@@ -1253,6 +1542,47 @@ create policy "Users manage own files" on plt_files for all to authenticated usi
                           </div>
                         </div>
 
+                        {/* Bulk Date Assignment Row */}
+                        <div className="flex items-center gap-4 flex-wrap border-t border-gray-200/50 pt-3">
+                          <div className="flex items-center gap-2">
+                            <Calendar size={14} className="text-gray-400" />
+                            <span className="text-xs font-semibold text-gray-500">Đặt ngày hàng loạt cho các file đã chọn:</span>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <input
+                              type="date"
+                              value={bulkChangeDate}
+                              onChange={(e) => setBulkChangeDate(e.target.value)}
+                              className="px-2.5 py-1 border border-gray-300 rounded-lg text-xs outline-none focus:ring-2 focus:ring-blue-500 bg-white font-semibold text-gray-700 h-8"
+                              disabled={selectedPendingIds.size === 0}
+                            />
+                            <button
+                              type="button"
+                              onClick={() => {
+                                if (selectedPendingIds.size === 0) return;
+                                try {
+                                  const parsed = parse(bulkChangeDate, 'yyyy-MM-dd', new Date());
+                                  const resolvedDateISO = parsed.toISOString();
+                                  
+                                  setPendingFiles(prev => prev.map(p => {
+                                    if (selectedPendingIds.has(p.tempId)) {
+                                      return { ...p, fileDate: resolvedDateISO };
+                                    }
+                                    return p;
+                                  }));
+                                  setSuccessMessage(`Đã cập nhật ngày cho ${selectedPendingIds.size} file thành công.`);
+                                } catch (e) {
+                                  setOperationError('Lỗi định dạng ngày.');
+                                }
+                              }}
+                              disabled={selectedPendingIds.size === 0}
+                              className="px-3 py-1 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-xs font-bold transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1.5 h-8 cursor-pointer"
+                            >
+                              Áp dụng ngày
+                            </button>
+                          </div>
+                        </div>
+
                         {/* Quick Select Tags for Bulk */}
                         <div className="space-y-2">
                           <p className="text-[10px] font-bold text-gray-400 uppercase tracking-wider">Gán nhanh bằng thẻ tên:</p>
@@ -1262,6 +1592,7 @@ create policy "Users manage own files" on plt_files for all to authenticated usi
                                 key={c.id} 
                                 name={c.name} 
                                 onClick={async () => {
+                                  if (isProcessing) return;
                                   setBulkCustomerName(c.name);
                                   // If files are selected, assign AND save immediately
                                   if (selectedPendingIds.size > 0) {
@@ -1271,6 +1602,7 @@ create policy "Users manage own files" on plt_files for all to authenticated usi
                                     const successfulTempIds: string[] = [];
                                     const newRecords: PLTFileRecord[] = [];
                                     const addedMappings: { code: string, customerName: string }[] = [];
+                                    const skippedFiles: string[] = [];
 
                                     setIsProcessing(true);
                                     setOperationError(null);
@@ -1279,6 +1611,11 @@ create policy "Users manage own files" on plt_files for all to authenticated usi
                                       for (const tempId of Array.from(selectedPendingIds)) {
                                         const pending = pendingFiles.find(p => p.tempId === (tempId as string));
                                         if (!pending || !pending.dimensions) continue;
+
+                                        if (savingTempIdsRef.current.has(pending.tempId)) {
+                                          continue;
+                                        }
+                                        savingTempIdsRef.current.add(pending.tempId);
 
                                         try {
                                           await dbService.updateMapping(pending.code, targetName);
@@ -1291,13 +1628,14 @@ create policy "Users manage own files" on plt_files for all to authenticated usi
                                             originalLength: pending.dimensions.length,
                                             adjustedLength: pending.dimensions.adjusted.adjustedLength,
                                             isOverWidth: pending.dimensions.adjusted.isOverWidth,
-                                            fileDate: new Date(pending.file.lastModified).toISOString()
+                                            fileDate: pending.fileDate
                                           });
                                           
                                           newRecords.push(addedFile);
                                           successfulTempIds.push(tempId as string);
                                         } catch (fileErr) {
                                           console.error(`Error processing bulk tag file ${pending.file.name}:`, fileErr);
+                                          savingTempIdsRef.current.delete(pending.tempId);
                                         }
                                       }
 
@@ -1305,6 +1643,7 @@ create policy "Users manage own files" on plt_files for all to authenticated usi
                                         setFiles(prev => [...newRecords, ...prev].sort((a, b) => 
                                           new Date(b.fileDate).getTime() - new Date(a.fileDate).getTime()
                                         ));
+                                        
                                         setSuccessMessage(`Đã gán và lưu thành công ${newRecords.length} sơ đồ.`);
                                       }
 
@@ -1325,6 +1664,7 @@ create policy "Users manage own files" on plt_files for all to authenticated usi
                                       setOperationError('Lỗi khi gán hàng loạt.');
                                     } finally {
                                       setIsProcessing(false);
+                                      pendingFiles.forEach(p => savingTempIdsRef.current.delete(p.tempId));
                                     }
                                   }
                                 }}
@@ -1338,137 +1678,267 @@ create policy "Users manage own files" on plt_files for all to authenticated usi
                   </div>
                   
                   <div className="max-h-[600px] overflow-y-auto custom-scrollbar">
-                    {pendingFiles.length > 0 ? (
-                      <div className="divide-y divide-gray-100">
-                        <AnimatePresence initial={false}>
-                          {pendingFiles.map((pending, idx) => (
-                            <motion.div 
-                              key={pending.tempId}
-                              initial={{ opacity: 0, x: -20 }}
-                              animate={{ opacity: 1, x: 0 }}
-                              exit={{ opacity: 0, x: 50, backgroundColor: '#f0fdf4', transition: { duration: 0.2 } }}
-                              layout
-                              className={`p-4 flex items-center gap-4 hover:bg-gray-50/50 transition-colors ${selectedPendingIds.has(pending.tempId) ? 'bg-blue-50/30' : ''}`}
-                            >
-                            <input 
-                              type="checkbox" 
-                              checked={selectedPendingIds.has(pending.tempId)}
-                              onChange={() => toggleSelectFile(pending.tempId)}
-                              className="w-4 h-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
-                            />
-                            <div className="flex-1 min-w-0">
-                              <p className="font-medium text-gray-900 truncate" title={pending.file.name}>
-                                {pending.file.name}
-                              </p>
-                              <div className="flex items-center gap-3 mt-1">
-                                <span className="text-xs text-gray-500 flex items-center gap-1">
-                                  Mã: <span className="font-bold text-gray-700">{pending.code}</span>
+                    {groupedPending.length > 0 ? (
+                      <div className="space-y-6 p-4 bg-gray-50/30">
+                        {groupedPending.map(group => (
+                          <div key={group.dateKey} className="bg-white p-4 rounded-xl border border-gray-200/80 shadow-xs space-y-3.5">
+                            {/* Date Group Header */}
+                            <div className="flex flex-col sm:flex-row sm:items-center justify-between border-b border-gray-150 pb-2.5 gap-2">
+                              <div className="flex items-center gap-2">
+                                <CalendarDays size={16} className="text-blue-600 animate-pulse" />
+                                <span className="font-bold text-gray-800 text-sm">Ngày {group.formattedDate}</span>
+                              </div>
+                              <div className="flex items-center gap-2">
+                                <span className="text-[10px] text-gray-500 font-semibold font-sans">Đổi ngày cả nhóm:</span>
+                                <input
+                                  type="date"
+                                  value={group.dateKey}
+                                  onChange={(e) => {
+                                    if (!e.target.value) return;
+                                    try {
+                                      const newD = parse(e.target.value, 'yyyy-MM-dd', new Date());
+                                      const isoStr = newD.toISOString();
+
+                                      setPendingFiles(prev => prev.map(p => {
+                                        let fileDateKey = 'Chưa rõ';
+                                        try {
+                                          fileDateKey = format(parseISO(p.fileDate), 'yyyy-MM-dd');
+                                        } catch (e) {}
+                                        if (fileDateKey === group.dateKey) {
+                                          return { ...p, fileDate: isoStr };
+                                        }
+                                        return p;
+                                      }));
+                                      setSuccessMessage(`Đã chuyển ngày của nhóm sang ${format(newD, 'dd/MM/yyyy')}`);
+                                    } catch(err) {}
+                                  }}
+                                  className="px-1.5 py-0.5 border border-dashed border-gray-300 rounded text-[10px] outline-none text-blue-700 bg-blue-50/40 font-bold cursor-pointer"
+                                />
+                                <span className="text-[10px] bg-blue-50 text-blue-700 px-2.5 py-1 rounded-full font-bold border border-blue-100/30">
+                                  {group.items.length} file
                                 </span>
-                                {pending.dimensions?.adjusted.isOverWidth && (
-                                  <span className="text-[10px] font-bold text-red-600 flex items-center gap-1 uppercase">
-                                    <AlertTriangle size={10} /> Quá khổ
-                                  </span>
-                                )}
                               </div>
                             </div>
-                            
-                            <div className="flex flex-col gap-3">
-                              <div className="flex items-center gap-3">
-                                <div className="relative" ref={activeTagPanelId === pending.tempId ? tagPanelRef : null}>
-                                   <input
-                                    type="text"
-                                    list="customer-suggestions"
-                                    value={pending.selectedCustomer}
-                                    onFocus={() => setActiveTagPanelId(pending.tempId)}
-                                    onChange={(e) => {
-                                      const newVal = e.target.value;
-                                      updatePendingCustomer(idx, newVal);
+
+                            {/* Group Items */}
+                            <div className="divide-y divide-gray-100 flex flex-col">
+                              <AnimatePresence initial={false}>
+                                {group.items.map((pending) => {
+                                  const isDuplicateInDB = pending.dimensions ? files.some(f => {
+                                    let fDate: Date;
+                                    try {
+                                      fDate = parseISO(f.fileDate);
+                                    } catch {
+                                      return false;
+                                    }
+                                    let pDate: Date;
+                                    try {
+                                      pDate = parseISO(pending.fileDate);
+                                    } catch {
+                                      pDate = new Date();
+                                    }
+                                    
+                                    // 1. Same day
+                                    const sameDay = isSameDay(pDate, fDate);
+                                    if (!sameDay) return false;
+                                    
+                                    // 2. Same filename (case-insensitive)
+                                    const sameName = f.fileName.trim().toLowerCase() === pending.file.name.trim().toLowerCase();
+                                    if (!sameName) return false;
+                                    
+                                    // 3. Same size
+                                    const sameSize = Math.abs(f.originalWidth - pending.dimensions.width) < 0.1 &&
+                                                     Math.abs(f.originalLength - pending.dimensions.length) < 0.1;
+                                    if (!sameSize) return false;
+                                    
+                                    // 4. Critical: File in DB must have a valid customer assigned that currently exists in active customer list
+                                    const hasCustomer = f.customerName && f.customerName.trim();
+                                    if (!hasCustomer) return false;
+                                    
+                                    return customers.some(c => c.name.trim().toLowerCase() === f.customerName.trim().toLowerCase());
+                                  }) : false;
+
+                                  return (
+                                    <motion.div 
+                                      key={pending.tempId}
+                                      initial={{ opacity: 0, y: 5 }}
+                                      animate={{ opacity: 1, y: 0 }}
+                                      exit={{ opacity: 0, x: 50, backgroundColor: '#f0fdf4', transition: { duration: 0.15 } }}
+                                      layout
+                                      className={`py-3.5 flex items-center justify-between gap-4 hover:bg-gray-50/50 transition-colors px-2 rounded-lg ${
+                                        isDuplicateInDB 
+                                          ? 'border-l-4 border-red-500 bg-red-50/60 shadow-xs' 
+                                          : selectedPendingIds.has(pending.tempId) 
+                                            ? 'bg-blue-50/20' 
+                                            : ''
+                                      }`}
+                                    >
+                                      <div className="flex items-center gap-3 min-w-0 flex-1">
+                                        <input 
+                                          type="checkbox" 
+                                          checked={selectedPendingIds.has(pending.tempId)}
+                                          onChange={() => toggleSelectFile(pending.tempId)}
+                                          className="w-4 h-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                                        />
+                                        <div className="min-w-0 flex-1">
+                                          <p className={`font-semibold text-xs truncate ${isDuplicateInDB ? 'text-red-900 font-bold' : 'text-gray-900'}`} title={pending.file.name}>
+                                            {pending.file.name}
+                                          </p>
+                                          <div className="flex items-center gap-3 mt-1.5 flex-wrap">
+                                            <span className="text-[11px] text-gray-500 font-medium">
+                                              Mã: <span className="font-bold text-gray-700">{pending.code}</span>
+                                            </span>
+                                            {pending.dimensions?.adjusted.isOverWidth && (
+                                              <span className="text-[9px] font-bold text-red-600 flex items-center gap-1 uppercase bg-red-50 px-1.5 py-0.5 rounded border border-red-150">
+                                                <AlertTriangle size={9} /> Quá khổ
+                                              </span>
+                                            )}
+                                            {isDuplicateInDB && (
+                                              <span className="text-[9px] font-bold text-red-700 flex items-center gap-1 uppercase bg-red-150/80 px-1.5 py-0.5 rounded border border-red-300 animate-pulse">
+                                                <AlertTriangle size={9} className="text-red-700 font-bold" /> Trùng sơ đồ đã gán khách & lưu
+                                              </span>
+                                            )}
+                                            
+                                            {/* Custom Inline Date override */}
+                                            <div className="flex items-center gap-1">
+                                              <span className="text-[10px] text-gray-400">Gán ngày:</span>
+                                              <input
+                                                type="date"
+                                                value={format(parseISO(pending.fileDate), 'yyyy-MM-dd')}
+                                                onChange={(e) => {
+                                                  try {
+                                                    const d = parse(e.target.value, 'yyyy-MM-dd', new Date());
+                                                    updatePendingDateById(pending.tempId, d.toISOString());
+                                                  } catch (err) {}
+                                                }}
+                                                className="px-1.5 py-0.5 border border-gray-250 rounded text-[10px] outline-none text-gray-600 bg-white font-semibold cursor-pointer border-dashed"
+                                              />
+                                            </div>
+                                          </div>
+                                        </div>
+                                      </div>
                                       
-                                      // Auto-save if selected from datalist or typed an exact match
-                                      const exists = customers.some(c => c.name === newVal);
-                                      if (exists) {
-                                        // Small delay to ensure state update or to wait for datalist selection to settle
-                                        setTimeout(() => handleSaveSingleFile(pending.tempId), 250);
-                                      }
-                                    }}
-                                    onKeyDown={(e) => e.key === 'Enter' && handleSaveSingleFile(pending.tempId)}
-                                    placeholder="Nhập tên KH..."
-                                    className={`pl-3 pr-3 py-2 border rounded-lg text-sm outline-none focus:ring-2 focus:ring-blue-500 w-48 ${
-                                      pending.selectedCustomer 
-                                        ? 'border-blue-200 bg-blue-50 text-blue-800' 
-                                        : 'border-gray-300 bg-white'
-                                    }`}
-                                  />
-
-                                  {/* Floating Tag Panel */}
-                                  {activeTagPanelId === pending.tempId && (
-                                    <div className="absolute top-full left-0 mt-1 w-72 bg-white border border-gray-200 rounded-xl shadow-xl z-50 p-3 animate-in fade-in zoom-in duration-150">
-                                      <div className="flex justify-between items-center mb-2">
-                                        <p className="text-[10px] font-bold text-gray-400 uppercase tracking-wider">Chọn nhanh khách hàng:</p>
-                                        <button onClick={() => setActiveTagPanelId(null)} className="text-gray-400 hover:text-gray-600">
-                                          <X size={12} />
-                                        </button>
-                                      </div>
-                                      <div className="flex flex-wrap gap-1.5 max-h-48 overflow-y-auto custom-scrollbar">
-                                        {customers.map(c => (
-                                          <button
-                                            key={c.id}
-                                            onClick={() => {
-                                              // Update and immediately save
-                                              const updatedPending = [...pendingFiles];
-                                              updatedPending[idx].selectedCustomer = c.name;
-                                              setPendingFiles(updatedPending);
-                                              setActiveTagPanelId(null);
+                                      <div className="flex items-center gap-2">
+                                        <div className="relative animate-in fade-in" ref={activeTagPanelId === pending.tempId ? tagPanelRef : null}>
+                                          <input
+                                            type="text"
+                                            list="customer-suggestions"
+                                            value={pending.selectedCustomer}
+                                            onFocus={() => setActiveTagPanelId(pending.tempId)}
+                                            onChange={(e) => {
+                                              const newVal = e.target.value;
+                                              // Manually typing or choosing clears isAutoFilled status
+                                              updatePendingCustomerById(pending.tempId, newVal, false);
                                               
-                                              // Small delay to ensure state update before save
-                                              setTimeout(() => handleSaveSingleFile(pending.tempId), 50);
+                                              const exists = customers.some(c => c.name === newVal);
+                                              if (exists) {
+                                                setTimeout(() => handleSaveSingleFile(pending.tempId), 250);
+                                              }
                                             }}
-                                            className={`px-2.5 py-1 rounded-lg text-xs font-medium transition-all border ${
-                                              pending.selectedCustomer === c.name
-                                                ? 'bg-blue-600 text-white border-blue-600'
-                                                : 'bg-gray-50 text-gray-700 border-gray-100 hover:border-blue-300 hover:bg-blue-50'
+                                            onKeyDown={(e) => e.key === 'Enter' && handleSaveSingleFile(pending.tempId)}
+                                            placeholder="Gán KH..."
+                                            className={`pl-2 pr-2 py-1.5 border rounded-lg text-xs outline-none focus:ring-2 focus:ring-blue-500 w-36 ${
+                                              pending.isAutoFilled 
+                                                ? 'border-emerald-300 bg-emerald-50/50 text-emerald-800 font-bold border-dashed'
+                                                : pending.selectedCustomer 
+                                                  ? 'border-blue-200 bg-blue-50 text-blue-800 font-bold' 
+                                                  : 'border-gray-300 bg-white text-gray-800'
                                             }`}
-                                          >
-                                            {c.name}
-                                          </button>
-                                        ))}
-                                      </div>
-                                    </div>
-                                  )}
-                                </div>
-                                
-                                <button 
-                                  onClick={() => handleSaveSingleFile(pending.tempId)}
-                                  disabled={!pending.selectedCustomer.trim()}
-                                  className="p-2 text-blue-600 hover:bg-blue-50 rounded-lg transition-colors disabled:opacity-30"
-                                  title="Lưu file này"
-                                >
-                                  <CheckCircle2 size={20} />
-                                </button>
-                              
-                                {pending.suggestedCustomer && pending.selectedCustomer !== pending.suggestedCustomer && (
-                                  <button 
-                                    onClick={() => updatePendingCustomer(idx, pending.suggestedCustomer)}
-                                    className="text-xs text-blue-600 hover:underline font-medium flex items-center gap-1"
-                                    title="Áp dụng gợi ý"
-                                  >
-                                    <Info size={12} />
-                                    Gợi ý: {pending.suggestedCustomer}
-                                  </button>
-                                )}
+                                          />
 
-                                <button 
-                                  onClick={() => removePendingFile(idx)}
-                                  className="p-2 text-gray-400 hover:text-red-500 transition-colors"
-                                >
-                                  <Trash2 size={18} />
-                                </button>
-                              </div>
+                                          {/* Floating Tag Panel */}
+                                          {activeTagPanelId === pending.tempId && (
+                                            <div className="absolute top-full right-0 mt-1 w-64 bg-white border border-gray-200 rounded-xl shadow-xl z-50 p-2.5 animate-in fade-in zoom-in duration-150">
+                                              <div className="flex justify-between items-center mb-1.5">
+                                                <p className="text-[9px] font-bold text-gray-400 uppercase tracking-wider">Chọn nhanh khách hàng:</p>
+                                                <button onClick={() => setActiveTagPanelId(null)} className="text-gray-400 hover:text-gray-650">
+                                                  <X size={11} />
+                                                </button>
+                                              </div>
+                                              <div className="flex flex-wrap gap-1 max-h-36 overflow-y-auto custom-scrollbar">
+                                                {customers.map(c => (
+                                                  <button
+                                                    key={c.id}
+                                                    type="button"
+                                                    onClick={() => {
+                                                      // Manual selection clears isAutoFilled and triggers immediate save
+                                                      updatePendingCustomerById(pending.tempId, c.name, false);
+                                                      setActiveTagPanelId(null);
+                                                      setTimeout(() => handleSaveSingleFile(pending.tempId), 50);
+                                                    }}
+                                                    className={`px-2 py-0.5 rounded text-[11px] font-semibold transition-all border ${
+                                                      pending.selectedCustomer === c.name
+                                                        ? 'bg-blue-600 text-white border-blue-600 shadow-xs'
+                                                        : 'bg-gray-50 text-gray-700 border-gray-100 hover:border-blue-300 hover:bg-blue-50'
+                                                    }`}
+                                                  >
+                                                    {c.name}
+                                                  </button>
+                                                ))}
+                                              </div>
+                                            </div>
+                                          )}
+                                        </div>
+                                        
+                                        <div className="flex items-center gap-1 flex-shrink-0 font-sans">
+                                          {pending.isAutoFilled ? (
+                                            <button 
+                                              type="button"
+                                              onClick={() => handleSaveSingleFile(pending.tempId)}
+                                              className="px-2.5 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white text-[11px] font-bold rounded-lg shadow-sm hover:shadow transition-all flex items-center gap-1 cursor-pointer animate-pulse"
+                                              title="Xác nhận đúng khách hàng này và Lưu sơ đồ"
+                                            >
+                                              <Check size={14} />
+                                              Đồng ý
+                                            </button>
+                                          ) : (
+                                            <button 
+                                              type="button"
+                                              onClick={() => handleSaveSingleFile(pending.tempId)}
+                                              disabled={!pending.selectedCustomer.trim()}
+                                              className="p-1.5 text-blue-600 hover:bg-blue-50 rounded-lg transition-colors disabled:opacity-30 cursor-pointer"
+                                              title="Lưu file này"
+                                            >
+                                              <CheckCircle2 size={18} />
+                                            </button>
+                                          )}
+                                        
+                                          {pending.suggestedCustomer && pending.selectedCustomer !== pending.suggestedCustomer && (
+                                            <button 
+                                              type="button"
+                                              onClick={() => {
+                                                // Manual suggestion accept triggers immediate save and clears isAutoFilled
+                                                updatePendingCustomerById(pending.tempId, pending.suggestedCustomer, false);
+                                                setTimeout(() => handleSaveSingleFile(pending.tempId), 50);
+                                              }}
+                                              className="p-1.5 text-orange-500 hover:bg-orange-50 rounded-lg transition-colors"
+                                              title={`Áp dụng gợi ý và Lưu ngay: ${pending.suggestedCustomer}`}
+                                            >
+                                              <Info size={16} />
+                                            </button>
+                                          )}
+
+                                          <button 
+                                            type="button"
+                                            onClick={() => {
+                                              const fileIdx = pendingFiles.findIndex(p => p.tempId === pending.tempId);
+                                              if (fileIdx >= 0) removePendingFile(fileIdx);
+                                            }}
+                                            className="p-1.5 text-gray-400 hover:text-red-500 transition-colors cursor-pointer"
+                                            title="Xóa khỏi hàng chờ"
+                                          >
+                                            <Trash2 size={16} />
+                                          </button>
+                                        </div>
+                                      </div>
+                                    </motion.div>
+                                  );
+                                })}
+                              </AnimatePresence>
                             </div>
-                          </motion.div>
+                          </div>
                         ))}
-                      </AnimatePresence>
-                    </div>
+                      </div>
                     ) : (
                       <div className="p-12 text-center">
                         <FolderOpen size={48} className="mx-auto text-gray-200 mb-4" />
@@ -1677,7 +2147,8 @@ create policy "Users manage own files" on plt_files for all to authenticated usi
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
               {customers.map(customer => {
                 const customerFiles = files.filter(f => 
-                  f.customerName === customer.name && 
+                  f.customerName && customer.name &&
+                  f.customerName.trim().toLowerCase() === customer.name.trim().toLowerCase() && 
                   format(parseISO(f.fileDate), 'MM/yyyy') === format(currentMonth, 'MM/yyyy')
                 );
                 
