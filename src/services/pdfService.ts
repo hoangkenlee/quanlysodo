@@ -26,6 +26,7 @@ export interface InvoiceData {
     width: number;
     length: number;
     adjustedLength: number;
+    fileDate?: string;
   }[];
   totalLength: number;
   unitPrice?: number;
@@ -58,25 +59,93 @@ export const pdfService = {
       printTableBody[0].push({ text: 'Thành tiền', style: 'tableHeader', alignment: 'right' });
     }
 
-    data.files.forEach((f, i) => {
-      const row = [
-        { text: (i + 1).toString(), alignment: 'center', fontSize: 10 },
-        { text: f.fileName, fontSize: 10 },
-        { text: f.width.toFixed(1), alignment: 'center', fontSize: 10 },
-        { text: f.adjustedLength.toFixed(2), alignment: 'right', fontSize: 10 },
-      ];
-
-      if (data.unitPrice) {
-        row.push({ text: data.unitPrice.toLocaleString('vi-VN'), alignment: 'right', fontSize: 10 } as any);
-        row.push({ text: (f.adjustedLength * data.unitPrice).toLocaleString('vi-VN'), alignment: 'right', fontSize: 10 } as any);
+    // Helper to format date
+    const formatDate = (dateStr?: string) => {
+      if (!dateStr) return 'Khác';
+      try {
+        const d = new Date(dateStr);
+        if (isNaN(d.getTime())) return 'Khác';
+        return d.toLocaleDateString('vi-VN');
+      } catch {
+        return 'Khác';
       }
+    };
 
-      printTableBody.push(row);
+    // Group files by date
+    const groupedFiles: Record<string, typeof data.files> = {};
+    data.files.forEach(f => {
+      const day = formatDate(f.fileDate);
+      if (!groupedFiles[day]) {
+        groupedFiles[day] = [];
+      }
+      groupedFiles[day].push(f);
+    });
+
+    // Sort days chronologically
+    const sortedDays = Object.keys(groupedFiles).sort((a, b) => {
+      if (a === 'Khác') return 1;
+      if (b === 'Khác') return -1;
+      const parseDate = (str: string) => {
+        const parts = str.split('/');
+        if (parts.length === 3) {
+          return new Date(parseInt(parts[2]), parseInt(parts[1]) - 1, parseInt(parts[0])).getTime();
+        }
+        return 0;
+      };
+      return parseDate(a) - parseDate(b);
+    });
+
+    let overallIndex = 1;
+
+    sortedDays.forEach(day => {
+      const filesForDay = groupedFiles[day];
+      const dayTotalLength = filesForDay.reduce((sum, f) => sum + f.adjustedLength, 0);
+
+      // Add a Day Header row
+      const numCols = data.unitPrice ? 6 : 4;
+      const dayHeaderRow = [
+        { text: `Ngày ${day}`, colSpan: numCols, bold: true, fontSize: 8.5, fillColor: '#eff6ff', margin: [0, 1.5] }
+      ];
+      // add remaining empty cells to satisfy colSpan
+      for (let c = 1; c < numCols; c++) {
+        dayHeaderRow.push({} as any);
+      }
+      printTableBody.push(dayHeaderRow);
+
+      // Add files for this day
+      filesForDay.forEach(f => {
+        const row = [
+          { text: (overallIndex++).toString(), alignment: 'center', fontSize: 8 },
+          { text: f.fileName, fontSize: 8 },
+          { text: f.width.toFixed(1), alignment: 'center', fontSize: 8 },
+          { text: f.adjustedLength.toFixed(2), alignment: 'right', fontSize: 8 },
+        ];
+
+        if (data.unitPrice) {
+          row.push({ text: data.unitPrice.toLocaleString('vi-VN'), alignment: 'right', fontSize: 8 } as any);
+          row.push({ text: (f.adjustedLength * data.unitPrice).toLocaleString('vi-VN'), alignment: 'right', fontSize: 8 } as any);
+        }
+
+        printTableBody.push(row);
+      });
+
+      // Add a Day Subtotal row
+      const daySubtotalRow = [
+        {},
+        { text: `Cộng ngày ${day}`, alignment: 'right', bold: true, fontSize: 8, color: '#2563eb' },
+        {},
+        { text: `${dayTotalLength.toFixed(2)} m`, alignment: 'right', bold: true, fontSize: 8, color: '#2563eb' },
+      ];
+      if (data.unitPrice) {
+        daySubtotalRow.push({});
+        daySubtotalRow.push({ text: `${(dayTotalLength * data.unitPrice).toLocaleString('vi-VN')} VNĐ`, alignment: 'right', bold: true, fontSize: 8, color: '#2563eb' });
+      }
+      printTableBody.push(daySubtotalRow);
     });
 
     const content: any[] = [
       { text: 'HOÁ ĐƠN DỊCH VỤ IN & THIẾT KẾ', style: 'header', alignment: 'center' },
-      { text: 'PLT MANAGER - GARBER TECH SOLUTION', style: 'subheader', alignment: 'center', margin: [0, 0, 0, 20] },
+      { text: 'PLT MANAGER - GARBER TECH SOLUTION', style: 'subheader', alignment: 'center', margin: [0, 0, 0, 8] },
       
       {
         columns: [
@@ -87,34 +156,35 @@ export const pdfService = {
               { text: [{ text: 'Ngày lập: ', bold: true }, new Date().toLocaleString('vi-VN')] },
               { text: [{ text: 'Kỳ dữ liệu: ', bold: true }, data.date] },
             ],
-            lineHeight: 1.4
+            lineHeight: 1.15
           },
         ],
-        margin: [0, 0, 0, 20]
+        margin: [0, 0, 0, 10]
       },
       
-      { text: '1. CHI TIẾT IN DỮ LIỆU', style: 'sectionTitle', margin: [0, 10, 0, 8] },
+      { text: '1. CHI TIẾT IN DỮ LIỆU', style: 'sectionTitle', margin: [0, 6, 0, 4] },
       {
         table: {
           headerRows: 1,
-          widths: data.unitPrice ? [25, '*', 45, 45, 60, 70] : [25, '*', 50, 60],
+          dontBreakRows: true,
+          widths: data.unitPrice ? [20, '*', 40, 40, 55, 65] : [20, '*', 45, 55],
           body: printTableBody
         },
         layout: {
           hLineWidth: (i: number, node: any) => (i === 0 || i === node.table.body.length) ? 1 : 0.5,
           vLineWidth: () => 0,
           hLineColor: (i: number) => (i === 0) ? '#3b82f6' : '#e5e7eb',
-          paddingLeft: () => 8,
-          paddingRight: () => 8,
-          paddingTop: () => 6,
-          paddingBottom: () => 6
+          paddingLeft: () => 6,
+          paddingRight: () => 6,
+          paddingTop: () => 4,
+          paddingBottom: () => 4
         }
       },
       {
         columns: [
           { text: '', width: '*' },
-          { text: 'Tổng in:', width: 150, alignment: 'right', bold: true, fontSize: 10, margin: [0, 5] },
-          { text: `${data.totalLength.toFixed(2)} m`, width: 100, alignment: 'right', bold: true, fontSize: 10, margin: [0, 5] },
+          { text: 'Tổng in:', width: 130, alignment: 'right', bold: true, fontSize: 8.5, margin: [0, 3] },
+          { text: `${data.totalLength.toFixed(2)} m`, width: 90, alignment: 'right', bold: true, fontSize: 8.5, margin: [0, 3] },
         ]
       },
     ];
@@ -123,87 +193,147 @@ export const pdfService = {
       content.push({
         columns: [
           { text: '', width: '*' },
-          { text: 'T.Tiền in:', width: 150, alignment: 'right', bold: true, fontSize: 11, margin: [0, 2] },
-          { text: `${printTotalAmount.toLocaleString('vi-VN')} VNĐ`, width: 120, alignment: 'right', bold: true, fontSize: 11, margin: [0, 2] }
+          { text: 'T.Tiền in:', width: 130, alignment: 'right', bold: true, fontSize: 9, margin: [0, 1] },
+          { text: `${printTotalAmount.toLocaleString('vi-VN')} VNĐ`, width: 110, alignment: 'right', bold: true, fontSize: 9, margin: [0, 1] }
         ]
       });
     }
 
     // Design items section
     if (data.designItems && data.designItems.length > 0) {
-      content.push({ text: '2. CHI TIẾT THIẾT KẾ MẪU', style: 'sectionTitle', margin: [0, 25, 0, 8] });
+      content.push({ text: '2. CHI TIẾT THIẾT KẾ MẪU', style: 'sectionTitle', margin: [0, 10, 0, 5] });
       
-      data.designItems.forEach((item, idx) => {
-        const itemStack: any[] = [
-          {
-            columns: [
-              {
-                width: '*',
-                stack: [
-                  { text: `${idx + 1}. ${item.name}`, bold: true, fontSize: 12 },
-                  item.notes ? { text: `Ghi chú: ${item.notes}`, fontSize: 10, color: '#666', margin: [0, 2] } : null,
-                  { text: `Số tiền: ${item.amount.toLocaleString('vi-VN')} VNĐ`, bold: true, margin: [0, 5] }
-                ].filter(Boolean)
-              }
-            ]
-          }
-        ];
-
+      const designTableBody: any[][] = [];
+      const columnsCount = 4; // 4 items per row
+      const tempRow: any[] = [];
+      
+      for (let i = 0; i < data.designItems.length; i++) {
+        const item = data.designItems[i];
+        
+        const cellStack: any[] = [];
         if (item.imageUrl) {
-          itemStack[0].columns.push({
+          cellStack.push({
             image: item.imageUrl,
-            width: 100,
-            alignment: 'right'
+            width: 45,
+            alignment: 'center',
+            margin: [0, 1, 0, 2]
+          });
+        } else {
+          cellStack.push({
+            text: 'Không có ảnh',
+            fontSize: 7,
+            color: '#9ca3af',
+            alignment: 'center',
+            margin: [0, 8, 0, 8]
           });
         }
-
-        content.push({
-          stack: itemStack,
-          margin: [0, 5, 0, 10],
-          border: [false, false, false, true],
-          borderColor: '#f3f4f6'
+        
+        cellStack.push({
+          text: `${i + 1}. ${item.name}`,
+          bold: true,
+          fontSize: 7.5,
+          alignment: 'center',
+          color: '#1f2937'
         });
+        
+        if (item.notes) {
+          cellStack.push({
+            text: item.notes,
+            fontSize: 6.5,
+            color: '#4b5563',
+            alignment: 'center',
+            margin: [0, 0.5, 0, 0]
+          });
+        }
+        
+        cellStack.push({
+          text: `${item.amount.toLocaleString('vi-VN')} đ`,
+          bold: true,
+          fontSize: 7.5,
+          color: '#2563eb',
+          alignment: 'center',
+          margin: [0, 1, 0, 1]
+        });
+        
+        tempRow.push({
+          stack: cellStack,
+          fillColor: '#f9fafb',
+          margin: [1, 1, 1, 1]
+        });
+        
+        // When row is full
+        if (tempRow.length === columnsCount) {
+          designTableBody.push([...tempRow]);
+          tempRow.length = 0;
+        }
+      }
+      
+      // If there are remaining items in tempRow, fill the rest with empty cells
+      if (tempRow.length > 0) {
+        while (tempRow.length < columnsCount) {
+          tempRow.push({ text: '', fillColor: '#ffffff' });
+        }
+        designTableBody.push([...tempRow]);
+      }
+      
+      content.push({
+        table: {
+          widths: Array(columnsCount).fill('*'),
+          dontBreakRows: true,
+          body: designTableBody
+        },
+        layout: {
+          hLineWidth: () => 0.5,
+          vLineWidth: () => 0.5,
+          hLineColor: () => '#e5e7eb',
+          vLineColor: () => '#e5e7eb',
+          paddingLeft: () => 1.5,
+          paddingRight: () => 1.5,
+          paddingTop: () => 3,
+          paddingBottom: () => 3
+        },
+        margin: [0, 2, 0, 5]
       });
 
       content.push({
         columns: [
           { text: '', width: '*' },
-          { text: 'Tổng thiết kế:', width: 150, alignment: 'right', bold: true, fontSize: 11 },
-          { text: `${designTotalAmount.toLocaleString('vi-VN')} VNĐ`, width: 120, alignment: 'right', bold: true, fontSize: 11 }
+          { text: 'Tổng thiết kế:', width: 130, alignment: 'right', bold: true, fontSize: 9 },
+          { text: `${designTotalAmount.toLocaleString('vi-VN')} VNĐ`, width: 110, alignment: 'right', bold: true, fontSize: 9 }
         ],
-        margin: [0, 5, 0, 0]
+        margin: [0, 3, 0, 0]
       });
     }
 
     // Grand Total
     content.push({
-      canvas: [{ type: 'line', x1: 300, y1: 10, x2: 515, y2: 10, lineWidth: 1, lineColor: '#dc2626' }],
-      margin: [0, 10]
+      canvas: [{ type: 'line', x1: 320, y1: 5, x2: 555, y2: 5, lineWidth: 1, lineColor: '#dc2626' }],
+      margin: [0, 6]
     });
 
     content.push({
       columns: [
         { text: '', width: '*' },
-        { text: 'TỔNG CỘNG THANH TOÁN:', width: 220, alignment: 'right', bold: true, color: '#dc2626', fontSize: 15 },
-        { text: `${finalGrandTotal.toLocaleString('vi-VN')} VNĐ`, width: 140, alignment: 'right', bold: true, color: '#dc2626', fontSize: 15 },
+        { text: 'TỔNG CỘNG THANH TOÁN:', width: 200, alignment: 'right', bold: true, color: '#dc2626', fontSize: 11 },
+        { text: `${finalGrandTotal.toLocaleString('vi-VN')} VNĐ`, width: 130, alignment: 'right', bold: true, color: '#dc2626', fontSize: 11 },
       ],
-      margin: [0, 5]
+      margin: [0, 3]
     });
 
     // Signature Area
     content.push({
-      margin: [0, 50, 0, 0],
+      margin: [0, 20, 0, 0],
       columns: [
         {
           stack: [
-            { text: 'Bên giao', bold: true, alignment: 'center' },
-            { text: '(Ký và ghi rõ họ tên)', fontSize: 9, color: '#666', alignment: 'center', margin: [0, 5] }
+            { text: 'Bên giao', bold: true, alignment: 'center', fontSize: 9 },
+            { text: '(Ký và ghi rõ họ tên)', fontSize: 7.5, color: '#666', alignment: 'center', margin: [0, 2] }
           ]
         },
         {
           stack: [
-            { text: 'Bên nhận', bold: true, alignment: 'center' },
-            { text: '(Ký và ghi rõ họ tên)', fontSize: 9, color: '#666', alignment: 'center', margin: [0, 5] }
+            { text: 'Bên nhận', bold: true, alignment: 'center', fontSize: 9 },
+            { text: '(Ký và ghi rõ họ tên)', fontSize: 7.5, color: '#666', alignment: 'center', margin: [0, 2] }
           ]
         }
       ]
@@ -213,23 +343,23 @@ export const pdfService = {
       content: content,
       styles: {
         header: {
-          fontSize: 20,
+          fontSize: 14,
           bold: true,
-          margin: [0, 0, 0, 5]
+          margin: [0, 0, 0, 3]
         },
         subheader: {
-          fontSize: 10,
+          fontSize: 8.5,
           color: '#666'
         },
         sectionTitle: {
-          fontSize: 12,
+          fontSize: 10,
           bold: true,
           color: '#3b82f6',
           decoration: 'underline'
         },
         tableHeader: {
           bold: true,
-          fontSize: 10,
+          fontSize: 8.5,
           color: 'white',
           fillColor: '#3b82f6',
         }
@@ -238,14 +368,14 @@ export const pdfService = {
         font: 'Roboto'
       },
       pageSize: 'A4',
-      pageMargins: [40, 40, 40, 40],
+      pageMargins: [20, 20, 20, 20],
       footer: (currentPage: number, pageCount: number) => {
         return {
           text: `Trang ${currentPage} / ${pageCount}`,
           alignment: 'center',
-          fontSize: 8,
+          fontSize: 7.5,
           color: '#aaa',
-          margin: [0, 10]
+          margin: [0, 6]
         };
       }
     };
