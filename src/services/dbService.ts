@@ -67,7 +67,7 @@ export const dbService = {
 
     const { data, error } = await getSupabase()
       .from('customers')
-      .select('*')
+      .select('id, user_id, name, created_at')
       .eq('user_id', user.id)
       .order('name');
     
@@ -151,7 +151,7 @@ export const dbService = {
 
     const { data, error } = await getSupabase()
       .from('code_mappings')
-      .select('*')
+      .select('code, customer_name')
       .eq('user_id', user.id);
     
     if (error) {
@@ -188,7 +188,7 @@ export const dbService = {
 
     const { data, error } = await getSupabase()
       .from('plt_files')
-      .select('*')
+      .select('id, user_id, file_name, customer_name, original_width, original_length, adjusted_length, is_over_width, created_at, file_date')
       .eq('user_id', user.id)
       .order('file_date', { ascending: false });
     
