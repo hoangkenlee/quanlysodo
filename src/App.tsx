@@ -60,6 +60,7 @@ import { excelService } from './services/excelService';
 import { AuthForm } from './components/AuthForm';
 import { getSupabase } from './lib/supabase';
 import { User, Session } from '@supabase/supabase-js';
+import JSZip from 'jszip';
 
 // --- Helper: Extract Code from Filename ---
 const extractCode = (fileName: string): string => {
@@ -137,6 +138,7 @@ export default function App() {
   const [newCustomerName, setNewCustomerName] = useState('');
   const [isProcessing, setIsProcessing] = useState(false);
   const [isAddingCustomer, setIsAddingCustomer] = useState(false);
+  const [isExtractingZip, setIsExtractingZip] = useState(false);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
   const [currentMonth, setCurrentMonth] = useState(new Date());
   const [expandedCustomerDay, setExpandedCustomerDay] = useState<{customerId: string, day: string} | null>(null);
@@ -482,76 +484,175 @@ export default function App() {
       }
     }
 
-    for (let i = 0; i < uploadedFiles.length; i++) {
-      const file = uploadedFiles[i];
-      if (!file.name.toLowerCase().endsWith('.plt') && !file.name.toLowerCase().endsWith('.hpgl') && !file.name.toLowerCase().endsWith('.hpg')) continue;
+    try {
+      for (let i = 0; i < uploadedFiles.length; i++) {
+        const file = uploadedFiles[i];
+        const fileNameLower = file.name.toLowerCase();
 
-      // Deduplicate inside the batch and pending queue
-      const isDuplicate = newPending.some(p => p.file.name.toLowerCase() === file.name.toLowerCase()) ||
-                          pendingFiles.some(p => p.file.name.toLowerCase() === file.name.toLowerCase());
-      if (isDuplicate) {
-        console.log(`Skipping duplicate file in selection: ${file.name}`);
-        continue;
+        // 1. Logic branch to handle .zip file
+        if (fileNameLower.endsWith('.zip')) {
+          setIsExtractingZip(true);
+          try {
+            const zipData = await file.arrayBuffer();
+            const zip = await JSZip.loadAsync(zipData);
+            
+            const zipEntries: { relativePath: string; fileEntry: any }[] = [];
+            zip.forEach((relativePath, fileEntry) => {
+              if (fileEntry.dir) return;
+              const baseName = relativePath.split('/').pop() || relativePath;
+              if (baseName.startsWith('._')) return; // ignore macOS metadata files
+              
+              const ext = baseName.toLowerCase();
+              if (ext.endsWith('.plt') || ext.endsWith('.hpgl') || ext.endsWith('.hpg')) {
+                zipEntries.push({ relativePath, fileEntry });
+              }
+            });
+
+            const zipParsedItemsDef = zipEntries.map(async ({ relativePath, fileEntry }) => {
+              const baseName = relativePath.split('/').pop() || relativePath;
+              try {
+                // Deduplicate inside the batch and pending queue
+                const isDuplicate = newPending.some(p => p.file.name.toLowerCase() === baseName.toLowerCase()) ||
+                                    pendingFiles.some(p => p.file.name.toLowerCase() === baseName.toLowerCase());
+                if (isDuplicate) {
+                  return null;
+                }
+
+                const content = await fileEntry.async('string');
+                const { width, length } = parsePLT(content);
+                const adjusted = calculateAdjustedDimensions(width, length);
+
+                const code = extractCode(baseName);
+                
+                let suggested = '';
+                const exactMapping = codeMappings.find(m => m.code.toLowerCase() === code.toLowerCase());
+                if (exactMapping) {
+                  suggested = exactMapping.customerName;
+                } else {
+                  const sortedMappings = [...codeMappings].sort((a, b) => b.code.length - a.code.length);
+                  const codeLower = code.toLowerCase();
+                  const substringMapping = sortedMappings.find(m => {
+                    const mCodeLower = m.code.toLowerCase();
+                    if (mCodeLower.length < 3) return false;
+                    return codeLower.includes(mCodeLower) || mCodeLower.includes(codeLower);
+                  });
+                  if (substringMapping) {
+                    suggested = substringMapping.customerName;
+                  }
+                }
+
+                const isInitiallyAutoFilled = suggested !== '';
+
+                let itemDate = resolvedDateISO;
+                if (uploadDateMode === 'file_date') {
+                  const entryDate = fileEntry.date instanceof Date ? fileEntry.date : new Date(file.lastModified || Date.now());
+                  itemDate = entryDate.toISOString();
+                }
+
+                const mockFile = new File([content], baseName, { 
+                  type: 'text/plain', 
+                  lastModified: fileEntry.date instanceof Date ? fileEntry.date.getTime() : Date.now() 
+                });
+
+                return {
+                  tempId: crypto.randomUUID(),
+                  file: mockFile,
+                  code,
+                  suggestedCustomer: suggested,
+                  selectedCustomer: suggested,
+                  fileDate: itemDate,
+                  isAutoFilled: isInitiallyAutoFilled,
+                  dimensions: { width, length, adjusted }
+                };
+              } catch (err) {
+                console.error(`Error parsing zip file entry ${baseName}:`, err);
+                return null;
+              }
+            });
+
+            const parsedZipEntries = (await Promise.all(zipParsedItemsDef)).filter(item => item !== null) as any[];
+            newPending.push(...parsedZipEntries);
+          } catch (zipErr) {
+            console.error(`Error processing zip file ${file.name}:`, zipErr);
+            setOperationError(`Lỗi khi giải nén tệp zip: ${file.name}`);
+          } finally {
+            setIsExtractingZip(false);
+          }
+        }
+        // 2. Original logic branch for regular files
+        else if (fileNameLower.endsWith('.plt') || fileNameLower.endsWith('.hpgl') || fileNameLower.endsWith('.hpg')) {
+          // Deduplicate inside the batch and pending queue
+          const isDuplicate = newPending.some(p => p.file.name.toLowerCase() === file.name.toLowerCase()) ||
+                              pendingFiles.some(p => p.file.name.toLowerCase() === file.name.toLowerCase());
+          if (isDuplicate) {
+            console.log(`Skipping duplicate file in selection: ${file.name}`);
+            continue;
+          }
+
+          const code = extractCode(file.name);
+          
+          // Intelligent robust mapping lookup
+          let suggested = '';
+          const exactMapping = codeMappings.find(m => m.code.toLowerCase() === code.toLowerCase());
+          if (exactMapping) {
+            suggested = exactMapping.customerName;
+          } else {
+            const sortedMappings = [...codeMappings].sort((a, b) => b.code.length - a.code.length);
+            const codeLower = code.toLowerCase();
+            const substringMapping = sortedMappings.find(m => {
+              const mCodeLower = m.code.toLowerCase();
+              if (mCodeLower.length < 3) return false;
+              return codeLower.includes(mCodeLower) || mCodeLower.includes(codeLower);
+            });
+            if (substringMapping) {
+              suggested = substringMapping.customerName;
+            }
+          }
+
+          const isInitiallyAutoFilled = suggested !== '';
+
+          try {
+            const content = await file.text();
+            const { width, length } = parsePLT(content);
+            const adjusted = calculateAdjustedDimensions(width, length);
+
+            let itemDate = resolvedDateISO;
+            if (uploadDateMode === 'file_date') {
+              itemDate = new Date(file.lastModified || Date.now()).toISOString();
+            }
+
+            // No auto-removal of duplicates here. We parse and keep files in the queue
+            newPending.push({
+              tempId: crypto.randomUUID(),
+              file,
+              code,
+              suggestedCustomer: suggested,
+              selectedCustomer: suggested,
+              fileDate: itemDate,
+              isAutoFilled: isInitiallyAutoFilled,
+              dimensions: { width, length, adjusted }
+            });
+          } catch (error) {
+            console.error(`Error parsing file ${file.name}:`, error);
+          }
+        }
       }
 
-      const code = extractCode(file.name);
-      
-      // Intelligent robust mapping lookup
-      let suggested = '';
-      const exactMapping = codeMappings.find(m => m.code.toLowerCase() === code.toLowerCase());
-      if (exactMapping) {
-        suggested = exactMapping.customerName;
+      if (uploadBehavior === 'replace') {
+        setPendingFiles(newPending);
+        setSelectedPendingIds(new Set(newPending.map(p => p.tempId)));
       } else {
-        const sortedMappings = [...codeMappings].sort((a, b) => b.code.length - a.code.length);
-        const codeLower = code.toLowerCase();
-        const substringMapping = sortedMappings.find(m => {
-          const mCodeLower = m.code.toLowerCase();
-          if (mCodeLower.length < 3) return false;
-          return codeLower.includes(mCodeLower) || mCodeLower.includes(codeLower);
-        });
-        if (substringMapping) {
-          suggested = substringMapping.customerName;
-        }
+        setPendingFiles(prev => [...prev, ...newPending]);
       }
-
-      const isInitiallyAutoFilled = suggested !== '';
-
-      try {
-        const content = await file.text();
-        const { width, length } = parsePLT(content);
-        const adjusted = calculateAdjustedDimensions(width, length);
-
-        let itemDate = resolvedDateISO;
-        if (uploadDateMode === 'file_date') {
-          itemDate = new Date(file.lastModified || Date.now()).toISOString();
-        }
-
-        // No auto-removal of duplicates here. We parse and keep files in the queue
-        newPending.push({
-          tempId: crypto.randomUUID(),
-          file,
-          code,
-          suggestedCustomer: suggested,
-          selectedCustomer: suggested,
-          fileDate: itemDate,
-          isAutoFilled: isInitiallyAutoFilled,
-          dimensions: { width, length, adjusted }
-        });
-      } catch (error) {
-        console.error(`Error parsing file ${file.name}:`, error);
-      }
+    } catch (err: any) {
+      console.error('Error in handleFileSelection:', err);
+      setOperationError('Đã xảy ra lỗi trong quá trình tải tệp lên.');
+    } finally {
+      setIsProcessing(false);
+      setIsExtractingZip(false);
+      if (fileInputRef.current) fileInputRef.current.value = '';
+      if (folderInputRef.current) folderInputRef.current.value = '';
     }
-
-    if (uploadBehavior === 'replace') {
-      setPendingFiles(newPending);
-      setSelectedPendingIds(new Set(newPending.map(p => p.tempId)));
-    } else {
-      setPendingFiles(prev => [...prev, ...newPending]);
-    }
-    
-    setIsProcessing(false);
-    if (fileInputRef.current) fileInputRef.current.value = '';
-    if (folderInputRef.current) folderInputRef.current.value = '';
   };
 
   const handleBulkAssign = async () => {
@@ -1424,7 +1525,7 @@ create policy "Users manage own files" on plt_files for all to authenticated usi
                         ref={fileInputRef}
                         onChange={handleFileSelection}
                         multiple
-                        accept=".plt,.hpgl,.hpg"
+                        accept=".plt,.hpgl,.hpg,.zip,application/zip,application/x-zip-compressed"
                         className="hidden"
                       />
                     </div>
@@ -1453,6 +1554,12 @@ create policy "Users manage own files" on plt_files for all to authenticated usi
                     <div className="mt-4 flex items-center justify-center gap-2 text-blue-600">
                       <div className="animate-spin rounded-full h-4 w-4 border-2 border-blue-600 border-t-transparent"></div>
                       <span className="text-sm font-medium">Đang phân tích file...</span>
+                    </div>
+                  )}
+                  {isExtractingZip && (
+                    <div className="mt-4 flex items-center justify-center gap-2 text-indigo-600">
+                      <div className="animate-spin rounded-full h-4 w-4 border-2 border-indigo-600 border-t-transparent"></div>
+                      <span className="text-sm font-medium">Đang giải nén và phân tích tệp ZIP...</span>
                     </div>
                   )}
                 </div>
