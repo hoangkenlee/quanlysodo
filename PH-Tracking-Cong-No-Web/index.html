@@ -1,17 +1,38 @@
 <!doctype html>
 <html lang="vi">
-<head><meta charset="UTF-8"/><meta name="viewport" content="width=device-width,initial-scale=1"/><title>PH - Tracking dịch vụ</title><link rel="stylesheet" href="./style.css"/></head>
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <title>PH - Đối soát dịch vụ & công nợ</title>
+  <link rel="stylesheet" href="./style.css"/>
+</head>
 <body>
-<header><div class="logo">PH</div><div><h1>Tracking dịch vụ & công nợ</h1><p>Pattern design and digital printing · 0931325512</p></div></header>
+<header>
+  <div class="brand"><div class="logo">PH</div><div><h1>Đối soát dịch vụ & công nợ</h1><p>Pattern design and digital printing · 0931325512</p></div></div>
+  <button id="print-report" class="print-button">In / Lưu PDF đối soát</button>
+</header>
 <main>
-  <div id="loading" class="card center">Đang tải dữ liệu...</div><div id="error" class="card center hidden"></div>
+  <div id="loading" class="card center">Đang tải dữ liệu...</div>
+  <div id="error" class="card center hidden"></div>
   <div id="content" class="hidden">
     <section class="customer card"><div><span>Khách hàng</span><h2 id="customer-name"></h2><p id="customer-note"></p></div><div class="balance"><span>Còn phải thanh toán</span><strong id="balance"></strong></div></section>
-    <section class="summary"><div class="card"><span>Số sơ đồ</span><strong id="print-count"></strong></div><div class="card"><span>Số ngày đã in</span><strong id="print-days"></strong></div><div class="card"><span>Tổng mét in</span><strong id="print-length"></strong></div><div class="card"><span>Số mẫu thiết kế</span><strong id="design-count"></strong></div></section>
-    <section class="card table-card"><h3>Lịch sử in sơ đồ</h3><table><thead><tr><th>Ngày</th><th>Tên sơ đồ</th><th class="right">Dài</th><th class="right">Thành tiền</th></tr></thead><tbody id="prints"></tbody></table><p id="prints-empty" class="center hidden">Chưa có lịch sử in.</p></section>
-    <section class="card table-card"><h3>Thiết kế mẫu</h3><table><thead><tr><th>Ngày</th><th>Tên mẫu</th><th>Ghi chú</th><th class="right">Thành tiền</th></tr></thead><tbody id="designs"></tbody></table><p id="designs-empty" class="center hidden">Chưa có thiết kế mẫu.</p></section>
-    <section class="card table-card"><h3>Thanh toán & điều chỉnh</h3><table><thead><tr><th>Ngày</th><th>Nội dung</th><th class="right">Tăng nợ</th><th class="right">Thanh toán</th></tr></thead><tbody id="entries"></tbody></table><p id="entries-empty" class="center hidden">Chưa có thanh toán hoặc điều chỉnh.</p></section>
+    <section class="summary">
+      <div class="card"><span>Tổng mét in</span><strong id="print-length"></strong></div>
+      <div class="card"><span>Đơn giá in</span><strong id="unit-price"></strong></div>
+      <div class="card"><span>Tiền in sơ đồ</span><strong id="print-total"></strong></div>
+      <div class="card"><span>Tiền thiết kế mẫu</span><strong id="design-total"></strong></div>
+      <div class="card paid-card"><span>Đã thanh toán</span><strong id="paid-total"></strong></div>
+      <div class="card debt-card"><span>Còn nợ lại</span><strong id="debt-total"></strong></div>
+    </section>
+    <section class="card breakdown"><h3>Cách tính công nợ</h3><p><b>Tiền in:</b> tổng số mét × đơn giá từng lần in. <b>Tổng công nợ:</b> tiền in + tiền thiết kế mẫu + điều chỉnh tăng nợ − số tiền đã thanh toán.</p><div class="mini-stats"><span><b id="print-count"></b> sơ đồ</span><span><b id="print-days"></b> ngày in</span><span><b id="design-count"></b> mẫu thiết kế</span></div></section>
+    <section class="card table-card"><h3>Số liệu in từng ngày</h3><table><thead><tr><th>Ngày</th><th class="right">Số sơ đồ</th><th class="right">Tổng mét</th><th class="right">Tiền in</th></tr></thead><tbody id="daily-prints"></tbody></table><p id="daily-prints-empty" class="center hidden">Chưa có lịch sử in.</p></section>
+    <section class="card table-card"><h3>Chi tiết lịch sử in sơ đồ</h3><table><thead><tr><th>Ngày</th><th>Tên sơ đồ</th><th class="right">Mét</th><th class="right">Đơn giá/m</th><th class="right">Thành tiền</th></tr></thead><tbody id="prints"></tbody></table><p id="prints-empty" class="center hidden">Chưa có lịch sử in.</p></section>
+    <section class="card design-section"><h3>Thiết kế mẫu</h3><div id="designs" class="design-grid"></div><p id="designs-empty" class="center hidden">Chưa có thiết kế mẫu.</p></section>
+    <section class="card table-card"><h3>Lịch sử thanh toán & điều chỉnh</h3><table><thead><tr><th>Ngày</th><th>Nội dung</th><th class="right">Tăng nợ</th><th class="right">Đã thanh toán</th></tr></thead><tbody id="entries"></tbody></table><p id="entries-empty" class="center hidden">Chưa có thanh toán hoặc điều chỉnh.</p></section>
   </div>
 </main>
-<footer>Dữ liệu được cập nhật từ PH · Liên hệ 0931325512 khi cần đối chiếu</footer><script type="module" src="./tracking.js"></script>
-</body></html>
+<footer>Dữ liệu được cập nhật từ PH · Liên hệ 0931325512 khi cần đối chiếu</footer>
+<div id="image-modal" class="image-modal hidden"><button id="close-modal">Đóng</button><img id="modal-image" alt="Ảnh thiết kế phóng to"/></div>
+<script type="module" src="./tracking.js"></script>
+</body>
+</html>
