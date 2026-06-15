@@ -1,22 +1,17 @@
 <!doctype html>
 <html lang="vi">
-  <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>PH - Tracking công nợ</title>
-    <link rel="stylesheet" href="./style.css" />
-  </head>
-  <body>
-    <header><div class="logo">PH</div><div><h1>Tracking công nợ</h1><p>Pattern design and digital printing · 0931325512</p></div></header>
-    <main>
-      <div id="loading" class="card center">Đang tải dữ liệu công nợ...</div>
-      <div id="error" class="card center hidden"></div>
-      <div id="content" class="hidden">
-        <section class="customer card"><div><span>Khách hàng</span><h2 id="customer-name"></h2><p id="customer-note"></p></div><div class="balance"><span>Còn phải thanh toán</span><strong id="balance"></strong></div></section>
-        <section class="card table-card"><table><thead><tr><th>Ngày</th><th>Nội dung</th><th class="right">Phát sinh</th><th class="right">Thanh toán</th></tr></thead><tbody id="entries"></tbody></table><p id="empty" class="center hidden">Chưa có phát sinh công nợ.</p></section>
-      </div>
-    </main>
-    <footer>Thông tin được cập nhật trực tiếp từ PH · Liên hệ 0931325512 khi cần đối chiếu</footer>
-    <script type="module" src="./tracking.js"></script>
-  </body>
-</html>
+<head><meta charset="UTF-8"/><meta name="viewport" content="width=device-width,initial-scale=1"/><title>PH - Tracking dịch vụ</title><link rel="stylesheet" href="./style.css"/></head>
+<body>
+<header><div class="logo">PH</div><div><h1>Tracking dịch vụ & công nợ</h1><p>Pattern design and digital printing · 0931325512</p></div></header>
+<main>
+  <div id="loading" class="card center">Đang tải dữ liệu...</div><div id="error" class="card center hidden"></div>
+  <div id="content" class="hidden">
+    <section class="customer card"><div><span>Khách hàng</span><h2 id="customer-name"></h2><p id="customer-note"></p></div><div class="balance"><span>Còn phải thanh toán</span><strong id="balance"></strong></div></section>
+    <section class="summary"><div class="card"><span>Số sơ đồ</span><strong id="print-count"></strong></div><div class="card"><span>Số ngày đã in</span><strong id="print-days"></strong></div><div class="card"><span>Tổng mét in</span><strong id="print-length"></strong></div><div class="card"><span>Số mẫu thiết kế</span><strong id="design-count"></strong></div></section>
+    <section class="card table-card"><h3>Lịch sử in sơ đồ</h3><table><thead><tr><th>Ngày</th><th>Tên sơ đồ</th><th class="right">Dài</th><th class="right">Thành tiền</th></tr></thead><tbody id="prints"></tbody></table><p id="prints-empty" class="center hidden">Chưa có lịch sử in.</p></section>
+    <section class="card table-card"><h3>Thiết kế mẫu</h3><table><thead><tr><th>Ngày</th><th>Tên mẫu</th><th>Ghi chú</th><th class="right">Thành tiền</th></tr></thead><tbody id="designs"></tbody></table><p id="designs-empty" class="center hidden">Chưa có thiết kế mẫu.</p></section>
+    <section class="card table-card"><h3>Thanh toán & điều chỉnh</h3><table><thead><tr><th>Ngày</th><th>Nội dung</th><th class="right">Tăng nợ</th><th class="right">Thanh toán</th></tr></thead><tbody id="entries"></tbody></table><p id="entries-empty" class="center hidden">Chưa có thanh toán hoặc điều chỉnh.</p></section>
+  </div>
+</main>
+<footer>Dữ liệu được cập nhật từ PH · Liên hệ 0931325512 khi cần đối chiếu</footer><script type="module" src="./tracking.js"></script>
+</body></html>
