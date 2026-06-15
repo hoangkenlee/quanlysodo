@@ -36,20 +36,21 @@ if (error || !data?.customer) {
   const prices = [...new Set(prints.map(item => Number(item.unit_price)).filter(Boolean))];
   const dailyMap = prints.reduce((groups, item) => {
     const group = groups[item.print_date] ||= { date: item.print_date, count: 0, metres: 0, amount: 0 };
-    group.count += 1; group.metres += Number(item.adjusted_length); group.amount += Number(item.amount);
+    const printCount = Math.max(1, Number(item.print_count) || 1);
+    group.count += printCount; group.metres += Number(item.adjusted_length) * printCount; group.amount += Number(item.amount);
     return groups;
   }, {});
   const dailyPrints = Object.values(dailyMap).sort((a, b) => b.date.localeCompare(a.date));
 
   setText('#customer-name', data.customer.name); setText('#customer-note', data.customer.notes || '');
   setText('#balance', money(balance)); setText('#debt-total', money(balance)); setText('#paid-total', money(paidTotal));
-  setText('#print-length', `${sum(prints, 'adjusted_length').toFixed(2)}m`);
+  setText('#print-length', `${prints.reduce((total, item) => total + Number(item.adjusted_length) * Math.max(1, Number(item.print_count) || 1), 0).toFixed(2)}m`);
   setText('#unit-price', prices.length === 1 ? `${money(prices[0])}/m` : prices.length ? 'Nhiều đơn giá' : 'Chưa nhập');
   setText('#print-total', money(printTotal)); setText('#design-total', money(designTotal));
-  setText('#print-count', prints.length); setText('#print-days', dailyPrints.length); setText('#design-count', designs.length);
+  setText('#print-count', prints.reduce((total, item) => total + Math.max(1, Number(item.print_count) || 1), 0)); setText('#print-days', dailyPrints.length); setText('#design-count', designs.length);
 
   render('#daily-prints', '#daily-prints-empty', dailyPrints, item => `<tr><td>${date(item.date)}</td><td class="right">${item.count}</td><td class="right">${item.metres.toFixed(2)}m</td><td class="right charge">${money(item.amount)}</td></tr>`);
-  render('#prints', '#prints-empty', prints, item => `<tr><td>${date(item.print_date)}</td><td>${esc(item.file_name)}</td><td class="right">${Number(item.adjusted_length).toFixed(2)}m</td><td class="right">${money(item.unit_price)}</td><td class="right charge">${money(item.amount)}</td></tr>`);
+  render('#prints', '#prints-empty', prints, item => { const count = Math.max(1, Number(item.print_count) || 1); return `<tr><td>${date(item.print_date)}</td><td>${esc(item.file_name)}</td><td class="right">${Number(item.adjusted_length).toFixed(2)}m</td><td class="right">x${count}</td><td class="right">${(Number(item.adjusted_length) * count).toFixed(2)}m</td><td class="right">${money(item.unit_price)}</td><td class="right charge">${money(item.amount)}</td></tr>`; });
   render('#designs', '#designs-empty', designs, item => `<article class="design-card">${item.image_url ? `<button class="image-button" data-image="${esc(item.image_url)}"><img src="${esc(item.image_url)}" alt="${esc(item.name)}"/></button>` : '<div class="no-image">Không có ảnh</div>'}<div class="design-body"><small>${date(item.design_date)}</small><h4>${esc(item.name)}</h4><p>${esc(item.notes)}</p><strong>${money(item.amount)}</strong></div></article>`);
   render('#entries', '#entries-empty', entries, item => `<tr><td>${date(item.entry_date)}</td><td>${esc(item.description)}</td><td class="right charge">${item.entry_type === 'charge' ? money(item.amount) : ''}</td><td class="right payment">${item.entry_type === 'payment' ? money(item.amount) : ''}</td></tr>`);
   document.querySelectorAll('.image-button').forEach(button => button.addEventListener('click', () => {

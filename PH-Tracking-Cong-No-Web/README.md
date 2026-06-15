@@ -1,5 +1,8 @@
 # PH Tracking Công Nợ
 
+Bộ tracking mới nhất dành cho PH PLT Manager 1.6.0. Trang tracking hiển thị số
+lần in, tổng mét sau khi nhân số lần in, đơn giá, thiết kế mẫu và thanh toán.
+
 Website tĩnh cho khách hàng xem công nợ theo link:
 
 ```text
