@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="vi">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>PH - Tracking công nợ</title>
+    <link rel="stylesheet" href="./style.css" />
+  </head>
+  <body>
+    <header><div class="logo">PH</div><div><h1>Tracking công nợ</h1><p>Pattern design and digital printing · 0931325512</p></div></header>
+    <main>
+      <div id="loading" class="card center">Đang tải dữ liệu công nợ...</div>
+      <div id="error" class="card center hidden"></div>
+      <div id="content" class="hidden">
+        <section class="customer card"><div><span>Khách hàng</span><h2 id="customer-name"></h2><p id="customer-note"></p></div><div class="balance"><span>Còn phải thanh toán</span><strong id="balance"></strong></div></section>
+        <section class="card table-card"><table><thead><tr><th>Ngày</th><th>Nội dung</th><th class="right">Phát sinh</th><th class="right">Thanh toán</th></tr></thead><tbody id="entries"></tbody></table><p id="empty" class="center hidden">Chưa có phát sinh công nợ.</p></section>
+      </div>
+    </main>
+    <footer>Thông tin được cập nhật trực tiếp từ PH · Liên hệ 0931325512 khi cần đối chiếu</footer>
+    <script type="module" src="./tracking.js"></script>
+  </body>
+</html>
